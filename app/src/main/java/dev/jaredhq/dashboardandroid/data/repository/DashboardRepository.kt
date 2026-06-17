@@ -5,6 +5,7 @@ import dev.jaredhq.dashboardandroid.data.api.DashboardApiClient
 import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 
@@ -95,6 +96,10 @@ class DashboardRepository(
     }
 
     suspend fun getQuote(): Result<QuotePayload> = runApi { client().getQuote() }
+
+    /** Today's reminders feed for the notification bridge (read-only, no cache). */
+    suspend fun getNotifications(): Result<NotificationsPayload> =
+        runApi { client().getNotifications() }
 
     suspend fun toggleHabit(habitId: Int): Result<TodayPayload> =
         runApi { client().toggleHabit(habitId).also { cache.save(it) } }

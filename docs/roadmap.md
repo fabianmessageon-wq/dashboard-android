@@ -12,6 +12,7 @@ Native Android companion for the self-hosted dashboard's Phase 11 widget API
 | 1 — Scaffold: domain/DTO/mappers, API client (Retrofit + fake), Room cache, EncryptedSharedPreferences settings, Compose Today/Capture/Settings, Glance widget, WorkManager refresh | ✅ done | `d5979a8` |
 | 2 — QA fixes: settings save/test race, base-URL validation/no-crash, enriched `/focus/start` + `/capture` + `/chat` responses, doc accuracy | ✅ done | `8dbde6a` |
 | 3 — Connection hardening: read-only `testConnection()` probe (no cache/server mutation), resume-driven Today refresh (tab return + app foreground), widget refresh after in-app capture, `dwtk_` token hint, friendly auth/URL/network errors | ✅ done | `bc9e129` |
+| 12 — Companion expansion: fast-capture widget + deep links (widget/notification → Capture/Today), notifications bridge (`/notifications` feed → native Reminders) + lock-screen daily quote, brand-matched theme + launcher/notification icon | ✅ written (not yet compiled) | — |
 
 **Build/verification gate:** authored in an environment with **no JDK / Gradle /
 Android SDK**, so nothing has been compiled or run. JVM unit tests are written and
@@ -27,8 +28,8 @@ Compose-BOM version skew the local SDK surfaces. See README "Verification status
   device against a live dashboard over the Tailscale HTTPS URL. Highest priority.
 - **Tasks screen** — a dedicated list beyond Today's single `mainAction`
   (intentionally trimmed for V1).
-- **Lock-screen / widget quote UI** — `QuotePayload` + `/quote` are wired in the
-  client; no surface renders them yet.
+- ~~**Lock-screen / widget quote UI**~~ — ✅ done (Phase 12): the daily quote is
+  posted as a lock-screen-visible notification by the notifications bridge.
 - **Focus countdown** — `FocusStartResult.session.fireAt` (epoch seconds) is
   decoded and preserved but not surfaced as an in-app/in-widget timer.
 - **In-app device-token mint/revoke** — currently done in the dashboard web UI

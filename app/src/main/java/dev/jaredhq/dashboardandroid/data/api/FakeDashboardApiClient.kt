@@ -4,6 +4,7 @@ import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusSession
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import kotlinx.coroutines.delay
@@ -41,6 +42,11 @@ class FakeDashboardApiClient(
     override suspend fun getQuote(): QuotePayload {
         tick()
         return quotePayload
+    }
+
+    override suspend fun getNotifications(): NotificationsPayload {
+        tick()
+        return FakeData.notifications
     }
 
     override suspend fun toggleHabit(habitId: Int): TodayPayload = mutex.withLock {

@@ -6,13 +6,15 @@ import dev.jaredhq.dashboardandroid.work.RefreshScheduler
 
 /**
  * App entry point: initializes the service locator and schedules the periodic
- * background refresh so the widget/app cache stays warm without the user opening
- * the app.
+ * background work — the Today cache refresh (keeps the widget warm) and the
+ * notifications bridge (surfaces dashboard reminders + the daily quote) — so the
+ * companion stays useful without the user opening the app.
  */
 class DashboardApp : Application() {
     override fun onCreate() {
         super.onCreate()
         ServiceLocator.init(this)
         RefreshScheduler.ensureScheduled(this)
+        RefreshScheduler.ensureNotificationsScheduled(this)
     }
 }

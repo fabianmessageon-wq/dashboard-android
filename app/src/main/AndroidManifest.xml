@@ -4,6 +4,10 @@
     <!-- Talks to the user's self-hosted dashboard over HTTPS (Tailscale URL). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Surface dashboard reminders + the daily quote as native notifications.
+         Runtime-requested on Android 13+ (see MainActivity); the worker no-ops
+         if the user declines. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".DashboardApp"
@@ -33,6 +37,18 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/today_widget_info" />
+        </receiver>
+
+        <!-- Glance "Fast capture" widget — deep-links into the Capture screen. -->
+        <receiver
+            android:name=".widget.CaptureWidgetReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/capture_widget_info" />
         </receiver>
 
     </application>

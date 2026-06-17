@@ -1,5 +1,6 @@
 package dev.jaredhq.dashboardandroid
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -14,7 +15,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,13 +40,46 @@ import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
 
 class MainActivity : ComponentActivity() {
+
+    // The route a launcher/widget/notification asked us to open on. Held as a
+    // Compose state so [AppRoot] reacts to a fresh deep link delivered via
+    // onNewIntent (widget tap while the app is already running), not just cold
+    // start. Consumed (reset to null) once navigation happens.
+    private val startRoute = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        maybeRequestNotificationPermission()
+        startRoute.value = intent?.getStringExtra(EXTRA_START_ROUTE)
         setContent {
             DashboardTheme {
-                AppRoot()
+                AppRoot(startRoute)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        startRoute.value = intent.getStringExtra(EXTRA_START_ROUTE)
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        // Best-effort, fire-and-forget: the result doesn't gate any UI. The
+        // notification worker simply no-ops if the user declines.
+        requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), RC_NOTIFICATIONS)
+    }
+
+    companion object {
+        /** Intent extra carrying a tab route ("today" | "capture" | "settings"). */
+        const val EXTRA_START_ROUTE = "start_route"
+        private const val RC_NOTIFICATIONS = 4011
     }
 }
 
@@ -53,9 +90,26 @@ private enum class Tab(val route: String, val label: String, val icon: ImageVect
 }
 
 @Composable
-private fun AppRoot() {
+private fun AppRoot(startRoute: MutableState<String?>) {
     val navController = rememberNavController()
     val factory = AppViewModelFactory()
+
+    // React to a deep link (widget/notification) by switching tabs, then consume
+    // it so returning to the app later doesn't re-trigger the jump. Unknown
+    // routes are ignored defensively.
+    val requested = startRoute.value
+    LaunchedEffect(requested) {
+        if (requested != null) {
+            if (Tab.entries.any { it.route == requested }) {
+                navController.navigate(requested) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+            startRoute.value = null
+        }
+    }
 
     Scaffold(
         bottomBar = {

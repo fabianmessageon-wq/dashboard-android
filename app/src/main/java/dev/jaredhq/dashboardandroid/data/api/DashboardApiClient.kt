@@ -2,6 +2,7 @@ package dev.jaredhq.dashboardandroid.data.api
 
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 
@@ -24,6 +25,9 @@ interface DashboardApiClient {
 
     /** GET /api/widget/v1/quote */
     suspend fun getQuote(): QuotePayload
+
+    /** GET /api/widget/v1/notifications — today's reminders feed (read-scoped). */
+    suspend fun getNotifications(): NotificationsPayload
 
     /** POST /api/widget/v1/habits/{id}/toggle -> fresh Today payload */
     suspend fun toggleHabit(habitId: Int): TodayPayload

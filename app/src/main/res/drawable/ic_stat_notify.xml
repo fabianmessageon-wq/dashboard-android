@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar notification icon: the brand constellation, white-on-transparent
+     (the system tints it). Simple filled nodes + edges so it reads at 24dp. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6,17 L11,9 L17,13 M11,9 L16,6" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M6,17 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M11,9 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M17,13 m-1.4,0 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M16,6 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0z" />
+</vector>

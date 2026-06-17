@@ -4,6 +4,11 @@ import dev.jaredhq.dashboardandroid.domain.model.ActionState
 import dev.jaredhq.dashboardandroid.domain.model.FocusBlock
 import dev.jaredhq.dashboardandroid.domain.model.Habit
 import dev.jaredhq.dashboardandroid.domain.model.MainAction
+import dev.jaredhq.dashboardandroid.domain.model.NotificationCounts
+import dev.jaredhq.dashboardandroid.domain.model.NotificationItem
+import dev.jaredhq.dashboardandroid.domain.model.NotificationKind
+import dev.jaredhq.dashboardandroid.domain.model.NotificationPriority
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.QuoteSource
 import dev.jaredhq.dashboardandroid.domain.model.Readiness
@@ -73,5 +78,55 @@ object FakeData {
         date = "2026-06-17",
         text = "The work is the reward. Show up, do the next small thing.",
         source = QuoteSource(title = "Notes — On Craft", slug = "on-craft"),
+    )
+
+    val notifications: NotificationsPayload = NotificationsPayload(
+        version = 1,
+        date = "2026-06-17",
+        generatedAt = "2026-06-17T07:30:00.000Z",
+        headline = "Deep work on the launch proposal",
+        items = listOf(
+            NotificationItem(
+                id = "headline",
+                kind = NotificationKind.HEADLINE,
+                title = "Deep work on the launch proposal",
+                detail = "Highest-leverage task, due Thursday",
+                timeLabel = null,
+                whenEpoch = null,
+                href = "/tasks",
+                priority = NotificationPriority.NORMAL,
+            ),
+            NotificationItem(
+                id = "event:event:8",
+                kind = NotificationKind.EVENT,
+                title = "Standup",
+                detail = null,
+                timeLabel = "9:30 AM",
+                whenEpoch = 1_781_679_000L,
+                href = "/calendar",
+                priority = NotificationPriority.NORMAL,
+            ),
+            NotificationItem(
+                id = "deadline:task:12",
+                kind = NotificationKind.DEADLINE,
+                title = "Submit launch proposal",
+                detail = null,
+                timeLabel = "Due today",
+                whenEpoch = 1_781_654_400L,
+                href = "/tasks",
+                priority = NotificationPriority.HIGH,
+            ),
+            NotificationItem(
+                id = "habit",
+                kind = NotificationKind.HABIT,
+                title = "2 habits left today",
+                detail = "Read, Walk",
+                timeLabel = null,
+                whenEpoch = null,
+                href = "/habits",
+                priority = NotificationPriority.LOW,
+            ),
+        ),
+        counts = NotificationCounts(events = 1, deadlines = 1, habitsRemaining = 2),
     )
 }

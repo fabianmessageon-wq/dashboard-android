@@ -8,6 +8,7 @@ import dev.jaredhq.dashboardandroid.data.cache.InMemoryTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import kotlinx.coroutines.test.runTest
@@ -151,6 +152,7 @@ class RepositoryTest {
         private fun fail(): Nothing = throw ApiException(status, message)
         override suspend fun getToday(): TodayPayload = fail()
         override suspend fun getQuote(): QuotePayload = fail()
+        override suspend fun getNotifications(): NotificationsPayload = fail()
         override suspend fun toggleHabit(habitId: Int): TodayPayload = fail()
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
         override suspend fun capture(title: String): CaptureResult = fail()
@@ -161,6 +163,7 @@ class RepositoryTest {
     private class TodayOkQuoteFailsClient : DashboardApiClient {
         override suspend fun getToday(): TodayPayload = FakeData.today
         override suspend fun getQuote(): QuotePayload = throw ApiException(500, "quote down")
+        override suspend fun getNotifications(): NotificationsPayload = FakeData.notifications
         override suspend fun toggleHabit(habitId: Int): TodayPayload = FakeData.today
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult =
             FocusStartResult(FakeData.today, null)

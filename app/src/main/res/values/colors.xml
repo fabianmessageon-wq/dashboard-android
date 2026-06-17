@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand tokens mirrored from the dashboard (src/app/globals.css) for the
+         few places that can't read the Compose theme: the launch window
+         background and notification accent. -->
+    <color name="brand_bg">#191512</color>
+    <color name="brand_accent">#CC7A5C</color>
+</resources>
