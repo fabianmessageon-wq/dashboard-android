@@ -5,10 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.LocalContext
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
-import androidx.glance.action.actionStartActivity
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
@@ -60,7 +58,6 @@ object TodayWidget : GlanceAppWidget() {
 
     @Composable
     private fun WidgetContent(today: TodayPayload?) {
-        val context = LocalContext.current
         val onSurface = ColorProvider(BrandWidget.OnSurface)
         val muted = ColorProvider(BrandWidget.Muted)
         Column(
@@ -76,7 +73,7 @@ object TodayWidget : GlanceAppWidget() {
                     style = TextStyle(color = onSurface),
                 )
                 Spacer(GlanceModifier.height(8.dp))
-                Button(text = "Open", onClick = actionStartActivity(openRoute(context, "today")))
+                Button(text = "Open", onClick = openRouteAction("today"))
                 return@Column
             }
 
@@ -90,7 +87,7 @@ object TodayWidget : GlanceAppWidget() {
                 style = TextStyle(color = onSurface, fontWeight = FontWeight.Bold),
             )
             Spacer(GlanceModifier.height(6.dp))
-            Button(text = "＋ Capture", onClick = actionStartActivity(openRoute(context, "capture")))
+            Button(text = "＋ Capture", onClick = openRouteAction("capture"))
 
             today.focusBlock?.let { block ->
                 Spacer(GlanceModifier.height(6.dp))
