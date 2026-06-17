@@ -5,6 +5,7 @@ import dev.jaredhq.dashboardandroid.data.api.dto.CaptureResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.ChatRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartResponseDto
+import dev.jaredhq.dashboardandroid.data.api.dto.NotificationsPayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.QuotePayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.TodayPayloadDto
 import retrofit2.http.Body
@@ -28,6 +29,9 @@ interface DashboardService {
 
     @GET("api/widget/v1/quote")
     suspend fun getQuote(): QuotePayloadDto
+
+    @GET("api/widget/v1/notifications")
+    suspend fun getNotifications(): NotificationsPayloadDto
 
     @POST("api/widget/v1/habits/{id}/toggle")
     suspend fun toggleHabit(@Path("id") habitId: Int): TodayPayloadDto

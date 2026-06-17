@@ -22,7 +22,7 @@ Scopes (higher rank satisfies lower):
 
 | Scope     | Grants                                             |
 |-----------|----------------------------------------------------|
-| `read`    | `GET /today`, `GET /quote`                         |
+| `read`    | `GET /today`, `GET /quote`, `GET /notifications`   |
 | `actions` | everything in `read` **plus** all mutations        |
 
 Failures: `401` (missing/invalid/revoked token) with body `{ "error": "unauthorized" }`,
@@ -87,6 +87,43 @@ Auth still applies (`401`/`403` like any read endpoint). **After** auth, it
 never 5xxs on a knowledge-base problem: if the notes index is unreachable the
 server falls back to a built-in line and returns `200`. So it can fail to *auth*,
 but a successful auth always yields a quote, never a server error.
+
+## `GET /api/widget/v1/notifications`  — scope: `read`
+
+The notifications/reminders feed the Android notification bridge polls (see
+`src/lib/intelligence/notifications.ts`). A flat, versioned projection of today's
+events, approaching/overdue deadlines, remaining habits, and the headline. Pure,
+read-only, never throws on empty data (a quiet day returns `items: []`).
+
+```jsonc
+{
+  "version": 1,
+  "date": "2026-06-17",
+  "generatedAt": "2026-06-17T07:30:00.000Z",
+  "headline": "Deep work on the proposal",
+  "items": [
+    {
+      "id": "deadline:task:12",         // stable, namespaced (de-dupe key)
+      "kind": "deadline",               // headline | event | deadline | habit | warning
+      "title": "Submit launch proposal",
+      "detail": null,                   // nullable
+      "timeLabel": "Due today",         // "9:00 AM" | "All day" | "Due in 2 days" | "Overdue (…)" | null
+      "when": 1781654400,               // epoch SECONDS, or null for undated items
+      "href": "/tasks",
+      "priority": "high"                // high | normal | low
+    }
+  ],
+  "counts": { "events": 1, "deadlines": 1, "habitsRemaining": 2 }
+}
+```
+
+**Android handling:** decoded via `NotificationsPayloadDto → NotificationsPayload`
+(lenient: unknown `kind`/`priority` → `UNKNOWN`; missing fields defaulted). The
+`when` JSON field is a Kotlin keyword, mapped to `whenEpoch` with `@SerialName`.
+The `NotificationWorker` surfaces only `event`/`deadline` items as native
+notifications (the morning brief is delivered by the dashboard's server-side web
+push; habit/warning items stay in the app/widget), de-duped per day via
+`NotificationState`. See the README "Notifications" section.
 
 ## Mutations — each returns the **fresh full Today payload**
 

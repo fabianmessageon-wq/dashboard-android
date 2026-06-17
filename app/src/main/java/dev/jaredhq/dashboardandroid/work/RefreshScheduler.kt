@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 object RefreshScheduler {
 
     private const val WORK_NAME = "today-refresh"
+    private const val NOTIFY_WORK_NAME = "notifications-bridge"
 
     fun ensureScheduled(context: Context) {
         val request = PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES)
@@ -28,6 +29,28 @@ object RefreshScheduler {
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request,
+        )
+    }
+
+    /**
+     * Registers the periodic [NotificationWorker]. Every 3 hours is a calm
+     * cadence: frequent enough to catch new events/deadlines as the day unfolds,
+     * but battery-friendly. The worker is idempotent (see [NotificationWorker]),
+     * so the period only bounds *latency*, never causes duplicate posts.
+     */
+    fun ensureNotificationsScheduled(context: Context) {
+        val request = PeriodicWorkRequestBuilder<NotificationWorker>(3, TimeUnit.HOURS)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            NOTIFY_WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request,
         )

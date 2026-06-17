@@ -7,6 +7,7 @@ import dev.jaredhq.dashboardandroid.data.api.dto.toDirectCaptureResult
 import dev.jaredhq.dashboardandroid.data.api.dto.toDomain
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import retrofit2.HttpException
@@ -28,6 +29,9 @@ class RetrofitDashboardApiClient(
 
     override suspend fun getQuote(): QuotePayload =
         call { service.getQuote().toDomain() }
+
+    override suspend fun getNotifications(): NotificationsPayload =
+        call { service.getNotifications().toDomain() }
 
     override suspend fun toggleHabit(habitId: Int): TodayPayload =
         call { service.toggleHabit(habitId).toDomain() }
