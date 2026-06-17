@@ -1,13 +1,20 @@
 package dev.jaredhq.dashboardandroid
 
+import dev.jaredhq.dashboardandroid.data.api.ApiException
+import dev.jaredhq.dashboardandroid.data.api.DashboardApiClient
 import dev.jaredhq.dashboardandroid.data.api.FakeDashboardApiClient
 import dev.jaredhq.dashboardandroid.data.api.FakeData
 import dev.jaredhq.dashboardandroid.data.cache.InMemoryTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
+import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
+import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -86,5 +93,80 @@ class RepositoryTest {
         assertNotNull(capture.reply)
         assertFalse(capture.actions.isEmpty())
         assertEquals(capture.today, repository.cachedToday())
+    }
+
+    // ── testConnection (read-only probe) ────────────────────────────────────
+
+    @Test
+    fun testConnectionSucceedsAndDoesNotWriteCache() = runTest {
+        val (repository, _) = repo()
+        val result = repository.testConnection()
+        assertTrue(result is DashboardRepository.ConnectionResult.Connected)
+        result as DashboardRepository.ConnectionResult.Connected
+        assertEquals(FakeData.today.date, result.date)
+        assertTrue(result.quoteAvailable)
+        // A probe must NOT clobber the cache (it may run against an unconfirmed URL).
+        assertNull(repository.cachedToday())
+    }
+
+    @Test
+    fun testConnectionMapsAuthErrorToAuthFailed() = runTest {
+        val repository = DashboardRepository(
+            cache = InMemoryTodayCache(),
+            apiProvider = { FailingClient(status = 401) },
+        )
+        assertEquals(
+            DashboardRepository.ConnectionResult.AuthFailed,
+            repository.testConnection(),
+        )
+    }
+
+    @Test
+    fun testConnectionMapsNetworkErrorToUnreachable() = runTest {
+        val repository = DashboardRepository(
+            cache = InMemoryTodayCache(),
+            apiProvider = { FailingClient(status = 0, message = "timeout") },
+        )
+        val result = repository.testConnection()
+        assertTrue(result is DashboardRepository.ConnectionResult.Unreachable)
+    }
+
+    @Test
+    fun testConnectionReportsQuoteUnavailableButStillConnected() = runTest {
+        val repository = DashboardRepository(
+            cache = InMemoryTodayCache(),
+            apiProvider = { TodayOkQuoteFailsClient() },
+        )
+        val result = repository.testConnection()
+        assertTrue(result is DashboardRepository.ConnectionResult.Connected)
+        result as DashboardRepository.ConnectionResult.Connected
+        assertFalse(result.quoteAvailable)
+    }
+
+    /** A client that fails every call with a given HTTP status. */
+    private class FailingClient(
+        private val status: Int,
+        private val message: String = "boom",
+    ) : DashboardApiClient {
+        private fun fail(): Nothing = throw ApiException(status, message)
+        override suspend fun getToday(): TodayPayload = fail()
+        override suspend fun getQuote(): QuotePayload = fail()
+        override suspend fun toggleHabit(habitId: Int): TodayPayload = fail()
+        override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
+        override suspend fun capture(title: String): CaptureResult = fail()
+        override suspend fun chat(message: String): CaptureResult = fail()
+    }
+
+    /** getToday works, but the quote endpoint is unavailable. */
+    private class TodayOkQuoteFailsClient : DashboardApiClient {
+        override suspend fun getToday(): TodayPayload = FakeData.today
+        override suspend fun getQuote(): QuotePayload = throw ApiException(500, "quote down")
+        override suspend fun toggleHabit(habitId: Int): TodayPayload = FakeData.today
+        override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult =
+            FocusStartResult(FakeData.today, null)
+        override suspend fun capture(title: String): CaptureResult =
+            throw ApiException(0, "n/a")
+        override suspend fun chat(message: String): CaptureResult =
+            throw ApiException(0, "n/a")
     }
 }

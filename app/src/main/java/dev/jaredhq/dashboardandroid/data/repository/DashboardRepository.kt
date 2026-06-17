@@ -43,8 +43,37 @@ class DashboardRepository(
         val authError: Boolean = false,
     )
 
+    /** Outcome of a read-only connection probe (no cache or server mutation). */
+    sealed interface ConnectionResult {
+        /** GET /today succeeded. [quoteAvailable] reflects whether /quote also worked. */
+        data class Connected(val date: String, val quoteAvailable: Boolean) : ConnectionResult
+        /** The dashboard answered 401/403 — bad/missing/under-scoped token. */
+        data object AuthFailed : ConnectionResult
+        /** Couldn't reach the dashboard (bad URL, DNS, timeout, 5xx, …). */
+        data class Unreachable(val message: String) : ConnectionResult
+    }
+
     /** Last cached Today without touching the network — for the widget cold start. */
     suspend fun cachedToday(): TodayPayload? = cache.load()
+
+    /**
+     * Read-only connection probe for Settings. Exercises GET /today (and, for a
+     * fuller signal, GET /quote) against the saved base URL + token. Both are
+     * server-side non-mutating, and this deliberately does NOT write the cache —
+     * a test against a not-yet-confirmed URL must not clobber good cached data.
+     */
+    suspend fun testConnection(checkQuote: Boolean = true): ConnectionResult = try {
+        val api = client()
+        val today = api.getToday()
+        val quoteOk = !checkQuote || runCatching { api.getQuote() }.isSuccess
+        ConnectionResult.Connected(date = today.date, quoteAvailable = quoteOk)
+    } catch (e: ApiException) {
+        if (e.isAuthError) {
+            ConnectionResult.AuthFailed
+        } else {
+            ConnectionResult.Unreachable(e.message ?: "Could not reach the dashboard.")
+        }
+    }
 
     /**
      * Fetch the freshest Today. On success, updates the cache and returns NETWORK.

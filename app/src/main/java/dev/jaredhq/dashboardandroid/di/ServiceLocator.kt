@@ -12,6 +12,7 @@ import dev.jaredhq.dashboardandroid.data.cache.room.RoomTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
+import dev.jaredhq.dashboardandroid.widget.TodayWidget
 
 /**
  * Minimal hand-rolled DI. Deliberately not Hilt: the graph is tiny (settings,
@@ -37,11 +38,14 @@ object ServiceLocator {
     lateinit var repository: DashboardRepository
         private set
 
+    private lateinit var appContext: Context
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
             if (initialized) return
             val appContext = context.applicationContext
+            this.appContext = appContext
 
             settings = SecureSettingsStore(appContext)
 
@@ -77,5 +81,14 @@ object ServiceLocator {
                 enableLogging = BuildConfig.DEBUG,
             )
         }
+    }
+
+    /**
+     * Re-render the Glance widget from the (already-updated) cache — no network.
+     * Called after an in-app capture/chat so the home-screen widget reflects the
+     * fresh Today payload immediately instead of waiting for the periodic worker.
+     */
+    suspend fun refreshWidgetFromCache() {
+        if (::appContext.isInitialized) TodayWidget.updateAll(appContext)
     }
 }

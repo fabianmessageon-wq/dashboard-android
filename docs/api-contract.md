@@ -25,8 +25,15 @@ Scopes (higher rank satisfies lower):
 | `read`    | `GET /today`, `GET /quote`                         |
 | `actions` | everything in `read` **plus** all mutations        |
 
-Failures: `401` (missing/invalid/revoked token), `403` (token scope too low).
-Error bodies are `{ "error": "..." }`.
+Failures: `401` (missing/invalid/revoked token) with body `{ "error": "unauthorized" }`,
+`403` (token scope too low) with body `{ "error": "forbidden" }`. The Android
+client maps by status code (`ApiException.isAuthError` = 401/403), so it does not
+depend on the body text.
+
+**Connection test (client-side):** Settings → *Test connection* exercises this
+surface read-only — `GET /today` (and `GET /quote` for a fuller signal) — via
+`DashboardRepository.testConnection()`. It mutates neither the server nor the
+local cache, and maps the outcome to `Connected` / `AuthFailed` / `Unreachable`.
 
 ## `GET /api/widget/v1/today`  — scope: `read`
 

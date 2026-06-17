@@ -86,9 +86,25 @@ Pure-JVM unit tests run without a device or emulator:
 
 - `PayloadMappingTest` — decodes a sample of the server's real Today JSON and
   asserts the DTO→domain mapping (the contract regression test), unknown-enum
-  tolerance, forward-compat (unknown fields ignored), and DTO round-trip.
-- `RepositoryTest` — offline-first refresh + cache, and the "mutation returns the
-  fresh Today, replace state" behavior, against the in-memory fakes.
+  tolerance, forward-compat (unknown fields ignored), DTO round-trip, and the
+  enriched `/focus/start`, `/capture`, and `/chat`-fallback shapes.
+- `RepositoryTest` — offline-first refresh + cache, the "mutation returns the
+  fresh Today, replace state" behavior, and the read-only `testConnection()`
+  probe (success without writing cache; auth → AuthFailed; network → Unreachable;
+  quote-down still Connected), against in-memory fakes/doubles.
+- `BaseUrlNormalizationTest` — origin normalization, path/query stripping, scheme
+  validation, idempotence.
+- `DeviceTokenFormatTest` — the non-binding `dwtk_` token format hint.
+
+### Connection behavior
+
+- **Settings → Test connection** is read-only: it validates/normalizes the URL,
+  saves it, then probes `GET /today` (+ `/quote`) without mutating the server or
+  the local cache, and shows an actionable result (connected / auth / unreachable).
+- **Today** refreshes from `/api/widget/v1/today` on every resume — first show,
+  returning to the tab, and the app coming back to the foreground — so a capture
+  done elsewhere or a change on another device shows up. After an in-app capture/
+  chat the home-screen widget is refreshed from the freshly-cached Today as well.
 
 ## Verification status — IMPORTANT
 

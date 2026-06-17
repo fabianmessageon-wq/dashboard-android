@@ -14,8 +14,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,11 +88,14 @@ private fun AppRoot() {
             composable(Tab.Today.route) {
                 val vm: TodayViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
-                // Refresh on first show and whenever the user returns to this tab,
-                // so a capture/chat done elsewhere (which updated the cache) is
-                // reflected. The composition is disposed when navigating away and
-                // re-entered on return, re-running this effect.
-                LaunchedEffect(Unit) { vm.refresh() }
+                // Refresh whenever this destination RESUMES: first show, return to
+                // the tab (the NavBackStackEntry lifecycle is the LocalLifecycleOwner
+                // here), AND the app returning to the foreground. So a capture/chat
+                // done elsewhere — or a change made on another device — is reflected.
+                LifecycleResumeEffect(Unit) {
+                    vm.refresh()
+                    onPauseOrDispose { }
+                }
                 TodayScreen(
                     state = state,
                     onRefresh = vm::refresh,

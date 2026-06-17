@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jaredhq.dashboardandroid.data.api.ApiClientFactory
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
+import dev.jaredhq.dashboardandroid.data.settings.DeviceTokenFormat
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,6 +77,8 @@ class SettingsViewModel(
         }
         settings.setBaseUrl(normalized)
         val token = _state.value.tokenInput
+        // Compute a non-blocking format hint before the token leaves the field.
+        val tokenHint = if (token.isNotBlank()) DeviceTokenFormat.hintFor(token) else null
         if (token.isNotBlank()) settings.setToken(token)
         _state.update {
             it.copy(
@@ -83,7 +86,8 @@ class SettingsViewModel(
                 tokenInput = "",
                 hasToken = settings.hasToken(),
                 saved = true,
-                testResult = null,
+                // Surface the hint (if any); a clean save shows no message.
+                testResult = tokenHint,
             )
         }
         return true
@@ -97,10 +101,14 @@ class SettingsViewModel(
         }
     }
 
-    /** Hit GET /today with the saved config and report success/failure. */
+    /**
+     * Read-only live test of the saved config: exercises GET /today (+ /quote)
+     * without mutating the server or the local cache. Maps the result to an
+     * actionable message.
+     */
     fun testConnection() {
         viewModelScope.launch {
-            // Persist (and validate) the typed values FIRST so the refresh below
+            // Persist (and validate) the typed values FIRST so the probe below
             // uses the current base URL / token, then test.
             if (!persist()) return@launch
             if (settings.baseUrlSnapshot().isBlank()) {
@@ -109,13 +117,22 @@ class SettingsViewModel(
                 }
                 return@launch
             }
+            if (!settings.hasToken()) {
+                _state.update {
+                    it.copy(testing = false, testResult = "Add a device token before testing the connection.")
+                }
+                return@launch
+            }
             _state.update { it.copy(testing = true, testResult = null) }
-            val outcome = repository.refreshToday()
-            val msg = when {
-                outcome.source == DashboardRepository.DataSource.NETWORK ->
-                    "Connected — Today loaded for ${outcome.payload?.date ?: "today"}."
-                outcome.authError -> "Auth failed — check the device token."
-                else -> outcome.error ?: "Could not reach the dashboard."
+            val msg = when (val result = repository.testConnection()) {
+                is DashboardRepository.ConnectionResult.Connected -> {
+                    val quoteNote = if (result.quoteAvailable) "" else " (quote endpoint unavailable)"
+                    "Connected — Today loaded for ${result.date}$quoteNote."
+                }
+                DashboardRepository.ConnectionResult.AuthFailed ->
+                    "Auth failed (401/403) — check the device token and that its scope is \"actions\"."
+                is DashboardRepository.ConnectionResult.Unreachable ->
+                    "Couldn't reach the dashboard: ${result.message} Check the URL and that the dashboard is online."
             }
             _state.update { it.copy(testing = false, testResult = msg) }
         }

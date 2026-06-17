@@ -3,6 +3,7 @@ package dev.jaredhq.dashboardandroid.ui.capture
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
+import dev.jaredhq.dashboardandroid.di.ServiceLocator
 import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,9 +41,11 @@ class CaptureViewModel(
         if (text.isEmpty() || _state.value.sending) return
         viewModelScope.launch {
             _state.update { it.copy(sending = true, error = null, lastReply = null) }
+            var succeeded = false
             if (_state.value.useAssistant) {
                 repository.chat(text).fold(
                     onSuccess = { result ->
+                        succeeded = true
                         val note = when (result.mode) {
                             CaptureMode.TASK_FALLBACK -> " (AI off — saved as task)"
                             else -> ""
@@ -56,6 +59,7 @@ class CaptureViewModel(
             } else {
                 repository.capture(text).fold(
                     onSuccess = { result ->
+                        succeeded = true
                         val suffix = result.createdTaskId?.let { " (#$it)" } ?: ""
                         _state.update {
                             it.copy(sending = false, input = "", lastReply = "Saved as a task$suffix.")
@@ -64,6 +68,9 @@ class CaptureViewModel(
                     onFailure = { e -> _state.update { it.copy(sending = false, error = e.message) } },
                 )
             }
+            // The repository cached the fresh Today; reflect it on the home-screen
+            // widget right away rather than waiting for the periodic refresh.
+            if (succeeded) ServiceLocator.refreshWidgetFromCache()
         }
     }
 }
