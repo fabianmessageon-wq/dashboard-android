@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Dashboard</string>
+    <string name="today_widget_description">Today\'s main action, focus block, and habits.</string>
+</resources>

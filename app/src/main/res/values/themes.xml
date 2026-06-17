@@ -1,0 +1,5 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Compose drives the real theming (ui/theme). This Material3 parent only
+         needs to exist for the manifest and to avoid an ActionBar flash. -->
+    <style name="Theme.DashboardAndroid" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

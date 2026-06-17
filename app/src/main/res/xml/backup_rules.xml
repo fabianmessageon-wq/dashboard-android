@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- allowBackup is false in the manifest; this file is here for completeness if
+     it is ever enabled. The device token must NEVER be backed up. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="dashboard_secure_settings.xml" />
+</full-backup-content>
