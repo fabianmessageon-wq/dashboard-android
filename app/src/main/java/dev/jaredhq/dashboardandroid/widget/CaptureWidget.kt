@@ -1,14 +1,15 @@
 package dev.jaredhq.dashboardandroid.widget
 
 import android.content.Context
-import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.glance.Button
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.LocalContext
+import androidx.glance.action.Action
+import androidx.glance.action.ActionParameters
+import androidx.glance.action.actionParametersOf
 import androidx.glance.action.actionStartActivity
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
@@ -48,7 +49,6 @@ object CaptureWidget : GlanceAppWidget() {
 
     @Composable
     private fun WidgetContent() {
-        val context = LocalContext.current
         Column(
             modifier = GlanceModifier
                 .fillMaxSize()
@@ -66,27 +66,24 @@ object CaptureWidget : GlanceAppWidget() {
             )
             Spacer(GlanceModifier.height(10.dp))
             Row(modifier = GlanceModifier.fillMaxWidth()) {
-                Button(
-                    text = "＋ Capture",
-                    onClick = actionStartActivity(openRoute(context, "capture")),
-                )
+                Button(text = "＋ Capture", onClick = openRouteAction("capture"))
                 Spacer(GlanceModifier.width(8.dp))
-                Button(
-                    text = "Today",
-                    onClick = actionStartActivity(openRoute(context, "today")),
-                )
+                Button(text = "Today", onClick = openRouteAction("today"))
             }
         }
     }
 }
 
-/** Deep link into MainActivity on the given tab route. */
-internal fun openRoute(context: Context, route: String): Intent =
-    Intent(context, MainActivity::class.java).apply {
-        action = Intent.ACTION_VIEW
-        putExtra(MainActivity.EXTRA_START_ROUTE, route)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-    }
+/**
+ * Deep-link action: launch [MainActivity] on the given tab route. This Glance
+ * version's `actionStartActivity` takes a reified activity type (not an Intent),
+ * so the route rides along as an [ActionParameters] entry — Glance maps that key
+ * to an Intent extra, which MainActivity reads as [MainActivity.EXTRA_START_ROUTE].
+ */
+internal val ROUTE_KEY = ActionParameters.Key<String>(MainActivity.EXTRA_START_ROUTE)
+
+internal fun openRouteAction(route: String): Action =
+    actionStartActivity<MainActivity>(actionParametersOf(ROUTE_KEY to route))
 
 /** Raw brand tokens for the widgets (Glance can't read the Compose MaterialTheme). */
 internal object BrandWidget {
