@@ -76,8 +76,10 @@ A deliberately separate, never-blocking lock-screen quote (`WidgetQuote`):
 }
 ```
 
-Always `200` — if the knowledge base is unreachable the server returns a
-built-in fallback line rather than an error.
+Auth still applies (`401`/`403` like any read endpoint). **After** auth, it
+never 5xxs on a knowledge-base problem: if the notes index is unreachable the
+server falls back to a built-in line and returns `200`. So it can fail to *auth*,
+but a successful auth always yields a quote, never a server error.
 
 ## Mutations — each returns the **fresh full Today payload**
 
@@ -95,15 +97,22 @@ Optional body — both fields optional:
 { "taskId": 12, "durationMinutes": 25 }
 ```
 Defaults to a 25-minute block and no task link. `400` on an invalid `taskId`.
-Response (`201`): the Today payload **plus** a `session` object (with `fireAt`)
-the client can use to run its own countdown. V1 ignores `session`.
+Response (`201`): the Today payload **plus** a `session` object:
+```jsonc
+{ "session": { "id": 42, "fireAt": 1750000000 } }   // fireAt is epoch SECONDS
+```
+`fireAt` is the epoch-seconds end of the block, for a client-run countdown.
+**Android handling:** decoded into `FocusStartResult(today, session)` and
+preserved (the repository caches `today`); V1 doesn't surface the countdown yet.
 
 ### `POST /api/widget/v1/capture`
 ```jsonc
 { "title": "Buy milk" }
 ```
 Deterministic, offline-safe: always creates a task. `400` if `title` is empty.
-Response (`201`): the Today payload **plus** `createdTaskId`.
+Response (`201`): the Today payload **plus** `createdTaskId`. Note there is **no**
+`captureMode` field here (that's a `/chat` concept). **Android handling:** mapped
+to `CaptureResult` with `mode = DIRECT` and the `createdTaskId` preserved.
 
 ### `POST /api/widget/v1/chat`
 ```jsonc
@@ -120,11 +129,14 @@ Response (`201`): the Today payload **plus**:
 {
   "reply": "Added an event for Friday 2pm.",
   "actions": ["create_event"],          // tool names executed
-  "pendingConfirmation": [],            // destructive tools awaiting confirm (assistant mode)
+  "pendingConfirmation": [],            // assistant mode only — ABSENT on the fallback path
   "createdTaskId": 87,                  // present only on the task-fallback path
   "captureMode": "assistant"           // "assistant" | "task-fallback"
 }
 ```
+`pendingConfirmation` is omitted entirely on the deterministic task-fallback
+path (AI off); the Android DTO defaults it to an empty list so both shapes
+decode. `createdTaskId` only appears on the fallback path.
 
 ## Client mapping notes
 
@@ -133,5 +145,10 @@ Response (`201`): the Today payload **plus**:
   can add fields without breaking older app builds.
 - Unknown enum strings (`band`, `state`, `captureMode`) map to an `UNKNOWN`
   variant rather than throwing.
-- The capture/chat response is decoded as a flat object that inlines the Today
-  fields (`CaptureResponseDto`), matching the server's `{ ...todayPayload, ... }`.
+- The enriched responses are decoded as flat objects that inline the Today
+  fields, matching the server's `{ ...todayPayload, ... }`: `CaptureResponseDto`
+  for `/capture` and `/chat`, `FocusStartResponseDto` (adds `session`) for
+  `/focus/start`. Each projects the Today portion via `toTodayDto()`.
+- The interface returns rich types so nothing is silently dropped:
+  `startFocus → FocusStartResult`, `capture → CaptureResult` (DIRECT mode),
+  `chat → CaptureResult`.

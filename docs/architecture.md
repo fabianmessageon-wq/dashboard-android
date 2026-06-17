@@ -94,6 +94,7 @@ That drives an offline-first cache and a contract isolated behind a repository.
 - A dedicated Tasks list screen (the plan allows trimming to Today/Capture/
   Settings for V1; `mainAction`/`focusBlock` cover the task surface for now).
 - Rendering the lock-screen `quote` (endpoint + model are wired; no UI surface).
-- Using the focus `session.fireAt` to run an in-app/in-widget countdown.
+- Using the focus `session.fireAt` to run an in-app/in-widget countdown (the
+  session is now decoded and preserved in `FocusStartResult`, just not surfaced).
 - A real device-token mint/revoke flow in-app (done on the dashboard web UI;
   Settings documents it and accepts the pasted token).

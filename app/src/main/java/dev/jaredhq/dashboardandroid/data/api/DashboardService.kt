@@ -4,6 +4,7 @@ import dev.jaredhq.dashboardandroid.data.api.dto.CaptureRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.CaptureResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.ChatRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartRequest
+import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.QuotePayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.TodayPayloadDto
 import retrofit2.http.Body
@@ -32,10 +33,10 @@ interface DashboardService {
     suspend fun toggleHabit(@Path("id") habitId: Int): TodayPayloadDto
 
     @POST("api/widget/v1/focus/start")
-    suspend fun startFocus(@Body body: FocusStartRequest): TodayPayloadDto
+    suspend fun startFocus(@Body body: FocusStartRequest): FocusStartResponseDto
 
     @POST("api/widget/v1/capture")
-    suspend fun capture(@Body body: CaptureRequest): TodayPayloadDto
+    suspend fun capture(@Body body: CaptureRequest): CaptureResponseDto
 
     @POST("api/widget/v1/chat")
     suspend fun chat(@Body body: ChatRequest): CaptureResponseDto

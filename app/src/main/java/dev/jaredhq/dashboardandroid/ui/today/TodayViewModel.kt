@@ -35,12 +35,13 @@ class TodayViewModel(
     val state: StateFlow<TodayUiState> = _state.asStateFlow()
 
     init {
-        // Paint the cache immediately so first frame isn't blank, then refresh.
+        // Paint the cache immediately so the first frame isn't blank. The network
+        // refresh is driven by the screen (on first show AND on return to the tab),
+        // so capture/chat done on another tab is reflected when the user comes back.
         viewModelScope.launch {
             repository.cachedToday()?.let { cached ->
                 _state.update { it.copy(payload = cached, fromCache = true) }
             }
-            refresh()
         }
     }
 
@@ -81,7 +82,10 @@ class TodayViewModel(
             val result = repository.startFocus(taskId = taskId)
             _state.update { st ->
                 result.fold(
-                    onSuccess = { fresh -> st.copy(payload = fresh, fromCache = false, focusInFlight = false) },
+                    // The started session (result.session, with fireAt) is preserved
+                    // by the repository for a future countdown; here we just adopt the
+                    // refreshed Today payload.
+                    onSuccess = { res -> st.copy(payload = res.today, fromCache = false, focusInFlight = false) },
                     onFailure = { e -> st.copy(error = e.message, focusInFlight = false) },
                 )
             }

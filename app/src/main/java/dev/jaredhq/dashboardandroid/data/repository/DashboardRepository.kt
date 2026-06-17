@@ -4,6 +4,7 @@ import dev.jaredhq.dashboardandroid.data.api.ApiException
 import dev.jaredhq.dashboardandroid.data.api.DashboardApiClient
 import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 
@@ -51,7 +52,7 @@ class DashboardRepository(
      * error attached.
      */
     suspend fun refreshToday(): TodayOutcome = try {
-        val fresh = apiProvider().getToday()
+        val fresh = client().getToday()
         cache.save(fresh)
         TodayOutcome(fresh, DataSource.NETWORK)
     } catch (e: ApiException) {
@@ -64,41 +65,43 @@ class DashboardRepository(
         )
     }
 
-    suspend fun getQuote(): Result<QuotePayload> = runApi { apiProvider().getQuote() }
+    suspend fun getQuote(): Result<QuotePayload> = runApi { client().getQuote() }
 
     suspend fun toggleHabit(habitId: Int): Result<TodayPayload> =
-        runMutation { apiProvider().toggleHabit(habitId) }
+        runApi { client().toggleHabit(habitId).also { cache.save(it) } }
 
-    suspend fun startFocus(taskId: Int? = null, durationMinutes: Int? = null): Result<TodayPayload> =
-        runMutation { apiProvider().startFocus(taskId, durationMinutes) }
+    suspend fun startFocus(
+        taskId: Int? = null,
+        durationMinutes: Int? = null,
+    ): Result<FocusStartResult> =
+        runApi { client().startFocus(taskId, durationMinutes).also { cache.save(it.today) } }
 
-    suspend fun capture(title: String): Result<TodayPayload> =
-        runMutation { apiProvider().capture(title) }
+    suspend fun capture(title: String): Result<CaptureResult> =
+        runApi { client().capture(title).also { cache.save(it.today) } }
 
     /**
      * Intelligent capture. Returns the assistant reply plus the fresh Today; the
      * cache is updated from the embedded payload so the widget reflects it too.
      */
-    suspend fun chat(message: String): Result<CaptureResult> = try {
-        val result = apiProvider().chat(message)
-        cache.save(result.today)
-        Result.success(result)
+    suspend fun chat(message: String): Result<CaptureResult> =
+        runApi { client().chat(message).also { cache.save(it.today) } }
+
+    /**
+     * Resolve the API client, converting any *construction* failure (e.g. a
+     * malformed base URL that makes Retrofit throw) into an [ApiException] so it
+     * flows through the same error handling as a network failure instead of
+     * crashing the caller.
+     */
+    private suspend fun client(): DashboardApiClient = try {
+        apiProvider()
     } catch (e: ApiException) {
-        Result.failure(e)
+        throw e
+    } catch (e: Exception) {
+        throw ApiException(0, "Couldn't connect: ${e.message ?: "invalid dashboard URL"}", e)
     }
 
-    /** A mutation returns a fresh Today payload; persist it before returning. */
-    private suspend inline fun runMutation(
-        block: () -> TodayPayload,
-    ): Result<TodayPayload> = try {
-        val fresh = block()
-        cache.save(fresh)
-        Result.success(fresh)
-    } catch (e: ApiException) {
-        Result.failure(e)
-    }
-
-    private inline fun <T> runApi(block: () -> T): Result<T> = try {
+    /** Run an API call, normalizing both construction and call failures to Result. */
+    private suspend inline fun <T> runApi(block: () -> T): Result<T> = try {
         Result.success(block())
     } catch (e: ApiException) {
         Result.failure(e)

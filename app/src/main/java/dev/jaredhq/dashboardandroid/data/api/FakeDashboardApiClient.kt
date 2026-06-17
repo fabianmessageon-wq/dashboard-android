@@ -2,6 +2,8 @@ package dev.jaredhq.dashboardandroid.data.api
 
 import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.FocusSession
+import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import kotlinx.coroutines.delay
@@ -29,6 +31,7 @@ class FakeDashboardApiClient(
     private val mutex = Mutex()
     private var today: TodayPayload = initial
     private var nextTaskId = 1000
+    private var nextSessionId = 5000L
 
     override suspend fun getToday(): TodayPayload = mutex.withLock {
         tick()
@@ -52,20 +55,30 @@ class FakeDashboardApiClient(
         today
     }
 
-    override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): TodayPayload =
+    override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult =
         mutex.withLock {
             tick()
-            // The real server starts a session; the Today payload itself doesn't
-            // change much, so just echo current state with a benign warning drop.
-            today = today.copy(warnings = today.warnings)
-            today
+            // The real server starts a session and returns it alongside Today.
+            val minutes = (durationMinutes ?: 25).toLong()
+            val fireAt = System.currentTimeMillis() / 1000 + minutes * 60
+            FocusStartResult(
+                today = today,
+                session = FocusSession(id = nextSessionId++, fireAt = fireAt),
+            )
         }
 
-    override suspend fun capture(title: String): TodayPayload = mutex.withLock {
+    override suspend fun capture(title: String): CaptureResult = mutex.withLock {
         tick()
-        // A direct capture creates a task server-side; the visible Today change
-        // is usually just a possible new mainAction. Keep it simple/deterministic.
-        today
+        // A direct capture creates a task server-side and returns Today + the
+        // new task id; the visible Today change is usually just a new mainAction.
+        CaptureResult(
+            today = today,
+            reply = null,
+            actions = emptyList(),
+            pendingConfirmation = emptyList(),
+            createdTaskId = nextTaskId++,
+            mode = CaptureMode.DIRECT,
+        )
     }
 
     override suspend fun chat(message: String): CaptureResult = mutex.withLock {

@@ -2,6 +2,7 @@ package dev.jaredhq.dashboardandroid.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.jaredhq.dashboardandroid.data.api.ApiClientFactory
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,18 +53,40 @@ class SettingsViewModel(
 
     /** Persist base URL, and the token only if a new one was typed. */
     fun save() {
-        viewModelScope.launch {
-            val s = _state.value
-            settings.setBaseUrl(s.baseUrl)
-            if (s.tokenInput.isNotBlank()) settings.setToken(s.tokenInput)
-            _state.update {
-                it.copy(
-                    tokenInput = "",
-                    hasToken = settings.hasToken(),
-                    saved = true,
-                )
+        viewModelScope.launch { persist() }
+    }
+
+    /**
+     * Persist the typed settings, normalizing the base URL to an origin. Returns
+     * true on success; on a bad URL it sets a friendly [SettingsUiState.testResult]
+     * and returns false. Suspends until persisted, so callers (e.g.
+     * [testConnection]) can rely on storage being current — no save/refresh race.
+     */
+    private suspend fun persist(): Boolean {
+        val raw = _state.value.baseUrl.trim()
+        val normalized: String = if (raw.isEmpty()) {
+            "" // Blank clears the URL → app falls back to sample/fake data.
+        } else {
+            try {
+                ApiClientFactory.normalizeBaseUrl(raw)
+            } catch (e: IllegalArgumentException) {
+                _state.update { it.copy(saved = false, testResult = e.message ?: "Invalid URL.") }
+                return false
             }
         }
+        settings.setBaseUrl(normalized)
+        val token = _state.value.tokenInput
+        if (token.isNotBlank()) settings.setToken(token)
+        _state.update {
+            it.copy(
+                baseUrl = normalized,
+                tokenInput = "",
+                hasToken = settings.hasToken(),
+                saved = true,
+                testResult = null,
+            )
+        }
+        return true
     }
 
     /** Clear the saved token (e.g. after revoking it on the dashboard). */
@@ -77,8 +100,15 @@ class SettingsViewModel(
     /** Hit GET /today with the saved config and report success/failure. */
     fun testConnection() {
         viewModelScope.launch {
-            // Make sure the latest typed values are saved before testing.
-            save()
+            // Persist (and validate) the typed values FIRST so the refresh below
+            // uses the current base URL / token, then test.
+            if (!persist()) return@launch
+            if (settings.baseUrlSnapshot().isBlank()) {
+                _state.update {
+                    it.copy(testing = false, testResult = "Enter a dashboard URL to test the connection.")
+                }
+                return@launch
+            }
             _state.update { it.copy(testing = true, testResult = null) }
             val outcome = repository.refreshToday()
             val msg = when {

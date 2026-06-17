@@ -14,6 +14,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -87,6 +88,11 @@ private fun AppRoot() {
             composable(Tab.Today.route) {
                 val vm: TodayViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
+                // Refresh on first show and whenever the user returns to this tab,
+                // so a capture/chat done elsewhere (which updated the cache) is
+                // reflected. The composition is disposed when navigating away and
+                // re-entered on return, re-running this effect.
+                LaunchedEffect(Unit) { vm.refresh() }
                 TodayScreen(
                     state = state,
                     onRefresh = vm::refresh,

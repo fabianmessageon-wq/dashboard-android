@@ -97,6 +97,53 @@ data class FocusStartRequest(
 @Serializable
 data class ChatRequest(val message: String)
 
+/** The session the server creates on /focus/start. `fireAt` is epoch SECONDS. */
+@Serializable
+data class SessionDto(
+    val id: Long = 0,
+    val fireAt: Long = 0,
+)
+
+/**
+ * Response for POST /focus/start: the full Today payload PLUS the started
+ * `session`. Like [CaptureResponseDto], the Today fields are inlined by the
+ * server (`{ ...todayPayload, session }`), so they are duplicated here and
+ * projected back out via [toTodayDto].
+ */
+@Serializable
+data class FocusStartResponseDto(
+    val version: Int = 0,
+    val date: String = "",
+    val generatedAt: String = "",
+    val headline: String = "",
+    val recoveryMode: Boolean = false,
+    val readiness: ReadinessDto = ReadinessDto(),
+    val mainAction: MainActionDto? = null,
+    val focusBlock: FocusBlockDto? = null,
+    val bodyAction: WidgetActionDto = WidgetActionDto(),
+    val resetAction: WidgetActionDto = WidgetActionDto(),
+    val habits: List<HabitDto> = emptyList(),
+    val habitsRemaining: Int = 0,
+    val warnings: List<String> = emptyList(),
+    val session: SessionDto? = null,
+) {
+    fun toTodayDto(): TodayPayloadDto = TodayPayloadDto(
+        version = version,
+        date = date,
+        generatedAt = generatedAt,
+        headline = headline,
+        recoveryMode = recoveryMode,
+        readiness = readiness,
+        mainAction = mainAction,
+        focusBlock = focusBlock,
+        bodyAction = bodyAction,
+        resetAction = resetAction,
+        habits = habits,
+        habitsRemaining = habitsRemaining,
+        warnings = warnings,
+    )
+}
+
 /**
  * Response for POST /capture and POST /chat: the full Today payload PLUS the
  * capture metadata. Modeled with an explicit wrapper because the server inlines

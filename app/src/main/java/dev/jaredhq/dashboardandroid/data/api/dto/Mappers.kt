@@ -4,6 +4,8 @@ import dev.jaredhq.dashboardandroid.domain.model.ActionState
 import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusBlock
+import dev.jaredhq.dashboardandroid.domain.model.FocusSession
+import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.Habit
 import dev.jaredhq.dashboardandroid.domain.model.MainAction
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
@@ -104,4 +106,25 @@ fun CaptureResponseDto.toDomain(): CaptureResult = CaptureResult(
     pendingConfirmation = pendingConfirmation,
     createdTaskId = createdTaskId,
     mode = CaptureMode.fromWire(captureMode),
+)
+
+/**
+ * Map the direct /capture response. The server doesn't send `captureMode` here
+ * (that's a /chat field), so the mode is fixed to [CaptureMode.DIRECT] and the
+ * one field it does add — `createdTaskId` — is preserved.
+ */
+fun CaptureResponseDto.toDirectCaptureResult(): CaptureResult = CaptureResult(
+    today = toTodayDto().toDomain(),
+    reply = null,
+    actions = emptyList(),
+    pendingConfirmation = emptyList(),
+    createdTaskId = createdTaskId,
+    mode = CaptureMode.DIRECT,
+)
+
+fun SessionDto.toDomain(): FocusSession = FocusSession(id = id, fireAt = fireAt)
+
+fun FocusStartResponseDto.toDomain(): FocusStartResult = FocusStartResult(
+    today = toTodayDto().toDomain(),
+    session = session?.toDomain(),
 )

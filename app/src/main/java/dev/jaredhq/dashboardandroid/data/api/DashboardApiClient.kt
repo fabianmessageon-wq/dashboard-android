@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.data.api
 
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 
@@ -28,18 +29,25 @@ interface DashboardApiClient {
     suspend fun toggleHabit(habitId: Int): TodayPayload
 
     /**
-     * POST /api/widget/v1/focus/start -> fresh Today payload.
+     * POST /api/widget/v1/focus/start -> fresh Today payload + started session.
      *
      * Both fields are optional: the server defaults to a 25-minute block and a
-     * null task. The widget passes the [FocusBlock]/[MainAction] taskId so the
-     * started session is linked to the recommended task. The server's response
-     * also carries a `session` (with `fireAt`) the client can use to run its own
-     * countdown; V1 ignores it and just re-reads the refreshed Today payload.
+     * null task. The widget passes the focus-block/main-action taskId so the
+     * started session is linked to the recommended task. The response carries a
+     * `session` (`{ id, fireAt }`, `fireAt` epoch seconds) the client can later
+     * use to run its own countdown; it is preserved in [FocusStartResult] even
+     * though V1 only re-reads the refreshed Today payload.
      */
-    suspend fun startFocus(taskId: Int? = null, durationMinutes: Int? = null): TodayPayload
+    suspend fun startFocus(taskId: Int? = null, durationMinutes: Int? = null): FocusStartResult
 
-    /** POST /api/widget/v1/capture { title } -> fresh Today payload (201) */
-    suspend fun capture(title: String): TodayPayload
+    /**
+     * POST /api/widget/v1/capture { title } -> fresh Today payload (201).
+     *
+     * The deterministic, offline-safe path: always creates a task. Returns a
+     * [CaptureResult] with mode [dev.jaredhq.dashboardandroid.domain.model.CaptureMode.DIRECT]
+     * and the server's `createdTaskId`.
+     */
+    suspend fun capture(title: String): CaptureResult
 
     /** POST /api/widget/v1/chat { message } -> assistant summary + fresh Today */
     suspend fun chat(message: String): CaptureResult

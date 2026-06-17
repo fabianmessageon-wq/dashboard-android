@@ -1,9 +1,13 @@
 package dev.jaredhq.dashboardandroid
 
+import dev.jaredhq.dashboardandroid.data.api.dto.CaptureResponseDto
+import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.TodayPayloadDto
+import dev.jaredhq.dashboardandroid.data.api.dto.toDirectCaptureResult
 import dev.jaredhq.dashboardandroid.data.api.dto.toDomain
 import dev.jaredhq.dashboardandroid.data.api.dto.toDto
 import dev.jaredhq.dashboardandroid.domain.model.ActionState
+import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.ReadinessBand
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -96,6 +100,78 @@ class PayloadMappingTest {
         val reEncoded = json.encodeToString(TodayPayloadDto.serializer(), today.toDto())
         val again = json.decodeFromString(TodayPayloadDto.serializer(), reEncoded).toDomain()
         assertEquals(today, again)
+    }
+
+    @Test
+    fun decodesFocusStartResponseWithSession() {
+        // Mirrors /focus/start: { ...todayPayload, session: { id, fireAt } }.
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Focus", "recoveryMode": false,
+              "readiness": { "score": 60, "band": "moderate" },
+              "mainAction": null,
+              "focusBlock": { "startLabel": "09:30", "endLabel": "11:00", "taskId": 12 },
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "session": { "id": 42, "fireAt": 1750000000 }
+            }
+        """.trimIndent()
+
+        val result = json.decodeFromString(FocusStartResponseDto.serializer(), body).toDomain()
+        assertEquals(42L, result.session?.id)
+        assertEquals(1750000000L, result.session?.fireAt)
+        assertEquals("09:30", result.today.focusBlock?.startLabel)
+    }
+
+    @Test
+    fun decodesDirectCaptureResponseAsDirectModeWithTaskId() {
+        // Mirrors /capture: { ...todayPayload, createdTaskId } — no captureMode.
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Today", "recoveryMode": false,
+              "readiness": { "score": 50, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "createdTaskId": 87
+            }
+        """.trimIndent()
+
+        val result = json.decodeFromString(CaptureResponseDto.serializer(), body).toDirectCaptureResult()
+        assertEquals(CaptureMode.DIRECT, result.mode)
+        assertEquals(87, result.createdTaskId)
+        assertNull(result.reply)
+        assertTrue(result.actions.isEmpty())
+    }
+
+    @Test
+    fun decodesChatFallbackWithoutPendingConfirmation() {
+        // The /chat task-fallback path omits pendingConfirmation — must default empty.
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Today", "recoveryMode": false,
+              "readiness": { "score": 50, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "reply": "AI is off — saved it as a task.",
+              "actions": ["create_task"],
+              "createdTaskId": 5,
+              "captureMode": "task-fallback"
+            }
+        """.trimIndent()
+
+        val result = json.decodeFromString(CaptureResponseDto.serializer(), body).toDomain()
+        assertEquals(CaptureMode.TASK_FALLBACK, result.mode)
+        assertTrue(result.pendingConfirmation.isEmpty())
+        assertEquals(listOf("create_task"), result.actions)
+        assertEquals(5, result.createdTaskId)
     }
 
     @Test

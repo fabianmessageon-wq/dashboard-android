@@ -54,6 +54,30 @@ class RepositoryTest {
     }
 
     @Test
+    fun startFocusReturnsSessionAndCachesToday() = runTest {
+        val (repository, _) = repo()
+        val result = repository.startFocus(taskId = 12, durationMinutes = 25)
+        assertTrue(result.isSuccess)
+        val focus = result.getOrThrow()
+        // A session with a future fireAt (epoch seconds) is preserved, not dropped.
+        assertNotNull(focus.session)
+        assertTrue(focus.session!!.fireAt > 0)
+        // Today is cached for the widget.
+        assertEquals(focus.today, repository.cachedToday())
+    }
+
+    @Test
+    fun directCaptureIsDirectModeWithTaskIdAndCachesToday() = runTest {
+        val (repository, _) = repo()
+        val result = repository.capture("Buy milk")
+        assertTrue(result.isSuccess)
+        val capture = result.getOrThrow()
+        assertEquals(dev.jaredhq.dashboardandroid.domain.model.CaptureMode.DIRECT, capture.mode)
+        assertNotNull(capture.createdTaskId)
+        assertEquals(capture.today, repository.cachedToday())
+    }
+
+    @Test
     fun chatReturnsReplyAndCachesEmbeddedToday() = runTest {
         val (repository, _) = repo()
         val result = repository.chat("Book dentist next week")

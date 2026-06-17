@@ -55,8 +55,11 @@ class CaptureViewModel(
                 )
             } else {
                 repository.capture(text).fold(
-                    onSuccess = {
-                        _state.update { it.copy(sending = false, input = "", lastReply = "Saved as a task.") }
+                    onSuccess = { result ->
+                        val suffix = result.createdTaskId?.let { " (#$it)" } ?: ""
+                        _state.update {
+                            it.copy(sending = false, input = "", lastReply = "Saved as a task$suffix.")
+                        }
                     },
                     onFailure = { e -> _state.update { it.copy(sending = false, error = e.message) } },
                 )
