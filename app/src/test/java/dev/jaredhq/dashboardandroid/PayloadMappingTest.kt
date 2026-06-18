@@ -11,6 +11,7 @@ import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.ReadinessBand
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -172,6 +173,48 @@ class PayloadMappingTest {
         assertTrue(result.pendingConfirmation.isEmpty())
         assertEquals(listOf("create_task"), result.actions)
         assertEquals(5, result.createdTaskId)
+    }
+
+    @Test
+    fun decodesChatAssistantResponseCarryingAgendaAndDaySummary() {
+        // An assistant /chat that creates an event returns the enriched chat fields
+        // AND the fresh Today now carries agenda + daySummary. Both must decode: the
+        // assistant metadata and the embedded Today projection.
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Busy day", "recoveryMode": false,
+              "readiness": { "score": 60, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "agenda": [
+                { "title": "Friday sync", "startLabel": "14:00", "endLabel": "14:30",
+                  "timeLabel": "2:00–2:30 PM", "href": "/calendar", "source": "Work", "busy": true }
+              ],
+              "daySummary": { "freeDay": false, "hasCalendarBlocks": true,
+                "committedMinutes": 30, "freeMinutes": 390, "eventCount": 1,
+                "nextEventLabel": "Friday sync at 2:00 PM", "summary": "30m committed" },
+              "reply": "Added an event for Friday 2pm.",
+              "actions": ["create_event"],
+              "pendingConfirmation": [],
+              "captureMode": "assistant"
+            }
+        """.trimIndent()
+
+        val result = json.decodeFromString(CaptureResponseDto.serializer(), body).toDomain()
+        // Assistant metadata.
+        assertEquals(CaptureMode.ASSISTANT, result.mode)
+        assertEquals(listOf("create_event"), result.actions)
+        assertEquals("Added an event for Friday 2pm.", result.reply)
+        // Embedded Today carries the new fields through the chat projection.
+        assertEquals(1, result.today.agenda.size)
+        assertEquals("Friday sync", result.today.agenda.first().title)
+        assertEquals(1, result.today.busyEvents.size)
+        assertTrue(result.today.daySummary?.hasCalendarBlocks == true)
+        assertEquals("Friday sync at 2:00 PM", result.today.daySummary?.nextEventLabel)
+        assertFalse(result.today.isOpenDay)
     }
 
     @Test
