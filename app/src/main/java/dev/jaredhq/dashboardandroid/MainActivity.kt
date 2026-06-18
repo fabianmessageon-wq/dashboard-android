@@ -2,8 +2,12 @@ package dev.jaredhq.dashboardandroid
 
 import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -19,9 +23,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -160,11 +166,47 @@ private fun AppRoot(startRoute: MutableState<String?>) {
             composable(Tab.Capture.route) {
                 val vm: CaptureViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
+
+                // On-device speech-to-text via the platform recognizer activity.
+                // The recognizer app owns the microphone (so this app needs no
+                // RECORD_AUDIO) and shows its own listening UI; we only receive
+                // the final transcript and drop it into the input for editing.
+                val context = LocalContext.current
+                val speechAvailable = remember { SpeechRecognizer.isRecognitionAvailable(context) }
+                val speechLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult(),
+                ) { result ->
+                    val transcript = result.data
+                        ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                        ?.firstOrNull()
+                        ?.trim()
+                        .orEmpty()
+                    if (transcript.isNotEmpty()) vm.applyTranscript(transcript) else vm.onSpeechNoResult()
+                }
+
                 CaptureScreen(
                     state = state,
                     onInputChange = vm::onInputChange,
                     onToggleAssistant = vm::setUseAssistant,
                     onSend = vm::send,
+                    speechAvailable = speechAvailable,
+                    onStartSpeech = {
+                        if (!speechAvailable) {
+                            vm.onSpeechUnavailable()
+                        } else {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(
+                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                )
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your capture")
+                            }
+                            // A device can report a recognizer yet still fail to launch
+                            // the intent — fall back to the same friendly notice.
+                            runCatching { speechLauncher.launch(intent) }
+                                .onFailure { vm.onSpeechUnavailable() }
+                        }
+                    },
                 )
             }
             composable(Tab.Settings.route) {

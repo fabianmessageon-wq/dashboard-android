@@ -21,8 +21,12 @@ dashboard (the server owns the contract; this owns the phone). See the plan:
   vs blocked day + the next 2–3 committed calendar events), recovery-mode flag,
   focus block (▶ start), habits (✓ toggle), readiness, warnings.
 - **Capture screen:** quick capture via the assistant (`/chat`, the dashboard
-  decides task/note/event) or a direct task (`/capture`). Reachable in one tap
-  from the **fast-capture widget** or a notification (deep link).
+  decides task/note/event) or a direct task (`/capture`). **Dictate** with the
+  on-device speech recognizer — the transcript lands in the input for you to
+  review/edit before sending (no audio leaves the phone, nothing auto-sends). The
+  result is explicit: whether the assistant ran, fell back to a task, needs a
+  confirmation, or hit an error. Reachable in one tap from the **fast-capture
+  widget** or a notification (deep link).
 - **Two home-screen widgets:**
   - **Today** — headline, next committed event (or "Open day"), focus block
     (▶ start), habits (✓ toggle), plus a **＋ Capture** deep link. Brand-styled
@@ -145,8 +149,14 @@ Pure-JVM unit tests run without a device or emulator:
 
 - `PayloadMappingTest` — decodes a sample of the server's real Today JSON and
   asserts the DTO→domain mapping (the contract regression test), unknown-enum
-  tolerance, forward-compat (unknown fields ignored), DTO round-trip, and the
-  enriched `/focus/start`, `/capture`, and `/chat`-fallback shapes.
+  tolerance, forward-compat (unknown fields ignored), DTO round-trip, the
+  `agenda`/`daySummary` day-shape fields (incl. a `/chat` response carrying them),
+  and the enriched `/focus/start`, `/capture`, and `/chat`-fallback shapes.
+- `CaptureViewModelTest` — assistant-state behavior: assistant success stores
+  reply/actions/mode and clears the input, the task-fallback path is shown
+  explicitly, direct capture reports the saved task, `useAssistant` is snapshotted
+  at send start, and failures map to friendly messages without leaking internals.
+  Also the speech-transcript merge (append vs set).
 - `NotificationsMappingTest` — decodes the server's real `/notifications` JSON
   (incl. the reserved-word `when` field and a future field) and asserts the
   DTO→domain mapping, unknown `kind`/`priority` tolerance, and an empty feed.
@@ -204,24 +214,34 @@ the Tailscale HTTPS URL:
    off → *Test connection* → expect a clear "unreachable" message (not a crash).
    Paste a bad/`read`-only token → expect the auth-specific message.
 2. **Fast capture / chat.** Capture tab → type "Remind me to finish physics
-   revision tomorrow" with **Assistant** selected → *Capture* → expect a one-line
-   assistant reply; verify the task/reminder appears in the dashboard web app.
-   Repeat with **Task only** → expect "Saved as a task (#id)".
-3. **Fast-capture widget.** Add the **Fast capture** widget → tap **＋ Capture** →
+   revision tomorrow" with **Assistant** selected → *Capture* → expect a result
+   card that says **"Assistant handled this."** plus the one-line reply and the
+   tools it ran; verify the task/reminder appears in the dashboard web app. Repeat
+   with **Task only** → expect **"Saved as a task (#id)."** With the dashboard's
+   model calls disabled, Assistant should instead show **"AI is off — saved as a
+   task"** (the fallback is explicit, not silent). Force an error (bad token, or
+   Tailscale off) → expect a calm, specific message — never raw error text.
+3. **Dictation (speech-to-text).** Capture tab → tap **🎙 Speak** → the system
+   recognizer UI opens → say "Book the dentist next Tuesday" → the transcript
+   appears in the input. Edit it, then tap *Capture* (it must **not** auto-send).
+   With existing text in the field, dictation **appends**. On a device/emulator
+   with no recognizer, the button reads **"Speech unavailable"** and typing still
+   works.
+4. **Fast-capture widget.** Add the **Fast capture** widget → tap **＋ Capture** →
    app opens directly on the Capture screen (cold start *and* while already
    running). Tap **Today** → opens the Today tab.
-4. **Today widget.** Add the **Today** widget → ✓ a habit → it flips and the app's
+5. **Today widget.** Add the **Today** widget → ✓ a habit → it flips and the app's
    Today reflects it on next resume. ▶ start the focus block. Tap **＋ Capture**.
-5. **Today overview.** Today tab → pull data shows headline, readiness, the
+6. **Today overview.** Today tab → pull data shows headline, readiness, the
    **Day plan** card (open vs blocked + next committed events), main action,
    focus block, body/reset tiles, habits, warnings; *Refresh* re-pulls.
-6. **Notifications.** Grant the notification permission. To exercise without
+7. **Notifications.** Grant the notification permission. To exercise without
    waiting ~3h, trigger the worker from Android Studio (App Inspection →
    Background Task Inspector → run `notifications-bridge`) — or temporarily lower
    the period. Expect: a **Daily quote** notification (full text on the lock
    screen) once per day, and **Reminders** for today's events / due deadlines,
    not duplicated on a second run.
-7. **Emulator vs device.** All of the above work on an emulator **except**
+8. **Emulator vs device.** All of the above work on an emulator **except**
    reaching a Tailscale `*.ts.net` host (the emulator isn't on your tailnet unless
    Tailscale runs on the host and you use the host's tailnet via `10.0.2.2`/a
    reverse proxy). Easiest: test connectivity on a physical device with Tailscale;

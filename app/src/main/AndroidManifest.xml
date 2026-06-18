@@ -9,6 +9,17 @@
          if the user declines. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Capture dictation uses the platform speech recognizer via
+         RecognizerIntent.ACTION_RECOGNIZE_SPEECH. The recognizer app owns the
+         microphone, so this app requests NO RECORD_AUDIO. This <queries> entry
+         lets SpeechRecognizer.isRecognitionAvailable() resolve the recognizer
+         service under Android 11+ package visibility. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <application
         android:name=".DashboardApp"
         android:allowBackup="false"
