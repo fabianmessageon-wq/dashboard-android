@@ -13,6 +13,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.QuoteSource
 import dev.jaredhq.dashboardandroid.domain.model.Readiness
 import dev.jaredhq.dashboardandroid.domain.model.ReadinessBand
+import dev.jaredhq.dashboardandroid.domain.model.TodayDaySummary
+import dev.jaredhq.dashboardandroid.domain.model.TodayEvent
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WidgetAction
 
@@ -56,6 +58,57 @@ object FakeData {
         ),
         habitsRemaining = 2,
         warnings = listOf("3 tasks due today — consider deferring one."),
+        // A busy day: three committed blocks, ~3h25m spoken for.
+        agenda = listOf(
+            TodayEvent(
+                title = "Standup",
+                startLabel = "09:00",
+                endLabel = "09:15",
+                timeLabel = "09:00–09:15",
+                href = "/calendar",
+                source = "Work",
+                busy = true,
+            ),
+            TodayEvent(
+                title = "Design review",
+                startLabel = "11:30",
+                endLabel = "12:30",
+                timeLabel = "11:30–12:30",
+                href = "/calendar",
+                source = "Work",
+                busy = true,
+            ),
+            TodayEvent(
+                title = "1:1 with Sam",
+                startLabel = "15:00",
+                endLabel = "15:30",
+                timeLabel = "15:00–15:30",
+                href = "/calendar",
+                source = "Work",
+                busy = true,
+            ),
+        ),
+        daySummary = TodayDaySummary(
+            freeDay = false,
+            hasCalendarBlocks = true,
+            committedMinutes = 105,
+            freeMinutes = 315,
+            summary = "1h45m committed · ~5h free",
+        ),
+    )
+
+    /** A wide-open day: no calendar blocks, all time available for focus. */
+    val openToday: TodayPayload = today.copy(
+        headline = "Clear runway — protect a deep-work block",
+        warnings = emptyList(),
+        agenda = emptyList(),
+        daySummary = TodayDaySummary(
+            freeDay = true,
+            hasCalendarBlocks = false,
+            committedMinutes = 0,
+            freeMinutes = 480,
+            summary = "Nothing scheduled · ~8h free",
+        ),
     )
 
     val recoveryToday: TodayPayload = today.copy(
@@ -71,6 +124,15 @@ object FakeData {
             state = ActionState.REST,
         ),
         warnings = listOf("Low readiness — protect your downtime."),
+        // Recovery day: clear the calendar so the plan reads as protected time.
+        agenda = emptyList(),
+        daySummary = TodayDaySummary(
+            freeDay = true,
+            hasCalendarBlocks = false,
+            committedMinutes = 0,
+            freeMinutes = 480,
+            summary = "Kept clear — rest and recover.",
+        ),
     )
 
     val quote: QuotePayload = QuotePayload(
@@ -130,3 +192,4 @@ object FakeData {
         counts = NotificationCounts(events = 1, deadlines = 1, habitsRemaining = 2),
     )
 }
+

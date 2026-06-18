@@ -17,14 +17,16 @@ dashboard (the server owns the contract; this owns the phone). See the plan:
 
 ## What it does (V1)
 
-- **Today screen & widget:** headline / main action, recovery-mode flag, focus
-  block (▶ start), habits (✓ toggle), readiness, warnings.
+- **Today screen & widget:** headline / main action, a **Day plan** card (open
+  vs blocked day + the next 2–3 committed calendar events), recovery-mode flag,
+  focus block (▶ start), habits (✓ toggle), readiness, warnings.
 - **Capture screen:** quick capture via the assistant (`/chat`, the dashboard
   decides task/note/event) or a direct task (`/capture`). Reachable in one tap
   from the **fast-capture widget** or a notification (deep link).
 - **Two home-screen widgets:**
-  - **Today** — headline, focus block (▶ start), habits (✓ toggle), plus a
-    **＋ Capture** deep link. Brand-styled (warm surface, legible on the dark tile).
+  - **Today** — headline, next committed event (or "Open day"), focus block
+    (▶ start), habits (✓ toggle), plus a **＋ Capture** deep link. Brand-styled
+    (warm surface, legible on the dark tile).
   - **Fast capture** — a compact tile whose **＋ Capture** / **Today** buttons
     deep-link straight into the app, for the lowest-friction capture path.
 - **Notifications bridge:** a background worker mirrors the dashboard's
@@ -210,8 +212,9 @@ the Tailscale HTTPS URL:
    running). Tap **Today** → opens the Today tab.
 4. **Today widget.** Add the **Today** widget → ✓ a habit → it flips and the app's
    Today reflects it on next resume. ▶ start the focus block. Tap **＋ Capture**.
-5. **Today overview.** Today tab → pull data shows headline, readiness, main
-   action, focus block, body/reset tiles, habits, warnings; *Refresh* re-pulls.
+5. **Today overview.** Today tab → pull data shows headline, readiness, the
+   **Day plan** card (open vs blocked + next committed events), main action,
+   focus block, body/reset tiles, habits, warnings; *Refresh* re-pulls.
 6. **Notifications.** Grant the notification permission. To exercise without
    waiting ~3h, trigger the worker from Android Studio (App Inspection →
    Background Task Inspector → run `notifications-bridge`) — or temporarily lower
@@ -239,3 +242,4 @@ the Tailscale HTTPS URL:
 ## License
 
 Personal project — no license granted yet.
+

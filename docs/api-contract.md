@@ -13,7 +13,7 @@ dashboard server source as merged into `main` (PR #86, commit `a735a18`):
 
 ## Auth
 
-Every endpoint authenticates via an `Authorization: Bearer <token>` header (or,
+Every endpoint authenticates via an `Authorization: Bearer *** header (or,
 for the web app, the session cookie). Tokens are minted per device in the
 dashboard's **Settings → Devices** page; only a SHA-256 hash is stored
 server-side, and the raw value (prefix `dwtk_`) is shown once.
@@ -69,6 +69,51 @@ Returns the versioned **Today** payload (the `WidgetTodayPayload`):
 `state` (body/reset action) is one of `do | done | rest`. No `Date` objects or
 epoch seconds appear on the wire — the server formats focus times to tz-local
 `HH:mm`.
+
+### Additive: today's agenda + day shape (forward-compatible)
+
+The dashboard is rolling out two **additive** fields on this payload so the
+client can answer *"what is my day already committed to?"* at a glance. They are
+purely optional: older payloads omit them, and the Android DTO defaults `agenda`
+to `[]` and `daySummary` to `null`, so nothing breaks either way.
+
+> **Field names are provisional.** The exact server keys are still being settled
+> on the dashboard side. The client models the shape below and decodes leniently
+> (`ignoreUnknownKeys`, every field optional/defaulted); if the server ships
+> different names, only the DTO/mapper changes — domain/UI stay put. Treat the
+> names here as the client's current assumption, not a frozen contract.
+
+```jsonc
+{
+  // …all existing Today fields…
+  "agenda": [                            // committed events/blocks, display order; [] when open/absent
+    {
+      "title": "Standup",
+      "startLabel": "09:00",             // tz-local "HH:mm", or null (all-day/undated)
+      "endLabel": "09:15",               // tz-local "HH:mm", or null
+      "timeLabel": "09:00–09:15",        // optional pre-formatted span ("All day", etc.)
+      "href": "/calendar",               // optional deep link
+      "source": "Work",                  // optional calendar/source label
+      "busy": true                       // true blocks focus time; false = tentative/free marker (default true)
+    }
+  ],
+  "daySummary": {                          // or null when no day-summary data is sent
+    "freeDay": false,
+    "hasCalendarBlocks": true,
+    "committedMinutes": 105,
+    "freeMinutes": 315,
+    "summary": "1h45m committed · ~5h free"   // optional server-formatted one-liner
+  }
+}
+```
+
+**Android handling:** mapped to `TodayPayload.agenda: List<TodayEvent>` and
+`TodayPayload.daySummary: TodayDaySummary?`. The client derives an `isOpenDay`
+signal (server's `freeDay`/`hasCalendarBlocks` when present, else "no busy
+events"), surfaces a **Day plan** card (open vs blocked + next 2–3 events) above
+the recommended task on the Today screen, and shows the next block or "Open day"
+on the home-screen widget. `busy` defaults `true`, and a blank `summary` maps to
+`null`.
 
 ## `GET /api/widget/v1/quote`  — scope: `read`
 
@@ -196,3 +241,4 @@ decode. `createdTaskId` only appears on the fallback path.
 - The interface returns rich types so nothing is silently dropped:
   `startFocus → FocusStartResult`, `capture → CaptureResult` (DIRECT mode),
   `chat → CaptureResult`.
+

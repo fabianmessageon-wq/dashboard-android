@@ -86,6 +86,25 @@ object TodayWidget : GlanceAppWidget() {
                 today.headline,
                 style = TextStyle(color = onSurface, fontWeight = FontWeight.Bold),
             )
+
+            // What is the day already committed to? Next block, or "Open day".
+            Spacer(GlanceModifier.height(4.dp))
+            val nextEvent = today.busyEvents.firstOrNull() ?: today.agenda.firstOrNull()
+            if (nextEvent != null) {
+                val time = nextEvent.compactTime
+                Text(
+                    text = if (time.isNotEmpty()) "Next · $time · ${nextEvent.title}" else "Next · ${nextEvent.title}",
+                    style = TextStyle(color = onSurface, fontWeight = FontWeight.Medium),
+                )
+            } else {
+                Text(
+                    text = today.daySummary?.summary
+                        ?: today.daySummary?.nextEventLabel?.let { "Next · $it" }
+                        ?: "Open day — nothing scheduled",
+                    style = TextStyle(color = muted),
+                )
+            }
+
             Spacer(GlanceModifier.height(6.dp))
             Button(text = "＋ Capture", onClick = openRouteAction("capture"))
 
@@ -161,3 +180,4 @@ class StartFocusAction : ActionCallback {
         TodayWidget.update(context, glanceId)
     }
 }
+
