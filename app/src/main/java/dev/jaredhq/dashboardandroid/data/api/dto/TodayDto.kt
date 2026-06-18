@@ -27,6 +27,10 @@ data class TodayPayloadDto(
     val habits: List<HabitDto> = emptyList(),
     val habitsRemaining: Int = 0,
     val warnings: List<String> = emptyList(),
+    // Additive day-summary / agenda fields. Default empty/null so payloads that
+    // predate these (or omit them) still decode unchanged.
+    val agenda: List<TodayEventDto> = emptyList(),
+    val daySummary: TodayDaySummaryDto? = null,
 )
 
 @Serializable
@@ -63,6 +67,37 @@ data class HabitDto(
     val id: Int = 0,
     val title: String = "",
     val doneToday: Boolean = false,
+)
+
+/**
+ * A committed calendar event/block on `/today`. Field names are the client's
+ * best guess at the additive dashboard contract; all are optional so a partial
+ * or renamed payload degrades instead of failing to decode. `busy` defaults true
+ * (a committed event blocks focus time unless the server says otherwise).
+ */
+@Serializable
+data class TodayEventDto(
+    val title: String = "",
+    val startLabel: String? = null,
+    val endLabel: String? = null,
+    val allDay: Boolean = false,
+    val timeLabel: String? = null,
+    val href: String? = null,
+    val source: String? = null,
+    val taskId: Int? = null,
+    val busy: Boolean = true,
+)
+
+/** Day-at-a-glance summary on `/today`. All fields optional; safe "open" defaults. */
+@Serializable
+data class TodayDaySummaryDto(
+    val freeDay: Boolean = false,
+    val hasCalendarBlocks: Boolean = false,
+    val committedMinutes: Int = 0,
+    val freeMinutes: Int = 0,
+    val eventCount: Int = 0,
+    val nextEventLabel: String? = null,
+    val summary: String? = null,
 )
 
 @Serializable
@@ -125,6 +160,8 @@ data class FocusStartResponseDto(
     val habits: List<HabitDto> = emptyList(),
     val habitsRemaining: Int = 0,
     val warnings: List<String> = emptyList(),
+    val agenda: List<TodayEventDto> = emptyList(),
+    val daySummary: TodayDaySummaryDto? = null,
     val session: SessionDto? = null,
 ) {
     fun toTodayDto(): TodayPayloadDto = TodayPayloadDto(
@@ -141,6 +178,8 @@ data class FocusStartResponseDto(
         habits = habits,
         habitsRemaining = habitsRemaining,
         warnings = warnings,
+        agenda = agenda,
+        daySummary = daySummary,
     )
 }
 
@@ -165,6 +204,8 @@ data class CaptureResponseDto(
     val habits: List<HabitDto> = emptyList(),
     val habitsRemaining: Int = 0,
     val warnings: List<String> = emptyList(),
+    val agenda: List<TodayEventDto> = emptyList(),
+    val daySummary: TodayDaySummaryDto? = null,
     // Capture/chat metadata.
     val reply: String? = null,
     val actions: List<String> = emptyList(),
@@ -187,5 +228,8 @@ data class CaptureResponseDto(
         habits = habits,
         habitsRemaining = habitsRemaining,
         warnings = warnings,
+        agenda = agenda,
+        daySummary = daySummary,
     )
 }
+

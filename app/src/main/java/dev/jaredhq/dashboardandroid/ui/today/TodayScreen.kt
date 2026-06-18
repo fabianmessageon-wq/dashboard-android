@@ -35,6 +35,7 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusBlock
 import dev.jaredhq.dashboardandroid.domain.model.Habit
 import dev.jaredhq.dashboardandroid.domain.model.MainAction
 import dev.jaredhq.dashboardandroid.domain.model.Readiness
+import dev.jaredhq.dashboardandroid.domain.model.TodayEvent
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 
@@ -89,6 +90,10 @@ private fun TodayContent(
             fontWeight = FontWeight.SemiBold,
         )
         ReadinessRow(payload.readiness)
+
+        // "What is my day already committed to?" — surfaced above the task so the
+        // user sees the fixed shape of the day before deciding what to do next.
+        DayPlanCard(payload)
 
         payload.mainAction?.let { MainActionCard(it) }
         payload.focusBlock?.let {
@@ -163,6 +168,76 @@ private fun MainActionCard(action: MainAction) {
             Text("Main action", style = MaterialTheme.typography.labelMedium)
             Text(action.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             action.detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        }
+    }
+}
+
+/**
+ * "Day plan" — the at-a-glance answer to *what is my day already committed to?*
+ * Shows whether the day is open or blocked, a one-line committed/free summary,
+ * and the next few already-scheduled events. Renders for both new payloads
+ * (agenda/day-summary present) and old ones (degrades to a simple "Open day").
+ */
+@Composable
+private fun DayPlanCard(payload: TodayPayload) {
+    val open = payload.isOpenDay
+    // Prefer busy/committed blocks; if the day is somehow all tentative, still
+    // show those so the card isn't empty when agenda data exists.
+    val events = (payload.busyEvents.ifEmpty { payload.agenda }).take(3)
+    val summary = payload.daySummary?.summary
+
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Day plan", style = MaterialTheme.typography.labelMedium)
+            Text(
+                text = if (open) "Open day" else "Day is blocked",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            val subtitle = summary ?: payload.daySummary?.nextEventLabel?.let { "Next: $it" } ?: when {
+                events.isNotEmpty() && open -> "Some time held — mostly free."
+                events.isNotEmpty() -> "${payload.busyEvents.size} block(s) scheduled."
+                open -> "Nothing scheduled — your time is yours."
+                else -> null
+            }
+            subtitle?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (events.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                events.forEach { AgendaEventRow(it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgendaEventRow(event: TodayEvent) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val time = event.compactTime
+        if (time.isNotEmpty()) {
+            Text(
+                time,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        Text(
+            event.title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (event.busy) FontWeight.Medium else FontWeight.Normal,
+        )
+        event.source?.let {
+            Text("· $it", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -253,6 +328,14 @@ private fun PreviewToday() {
     }
 }
 
+@Preview(name = "Today — open day", showBackground = true)
+@Composable
+private fun PreviewOpenDay() {
+    DashboardTheme {
+        TodayScreen(TodayUiState(payload = FakeData.openToday), {}, {}, {})
+    }
+}
+
 @Preview(name = "Today — recovery", showBackground = true)
 @Composable
 private fun PreviewRecovery() {
@@ -268,3 +351,4 @@ private fun PreviewEmpty() {
         TodayScreen(TodayUiState(loading = false, payload = null), {}, {}, {})
     }
 }
+

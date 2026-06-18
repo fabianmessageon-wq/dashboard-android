@@ -12,6 +12,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.QuoteSource
 import dev.jaredhq.dashboardandroid.domain.model.Readiness
 import dev.jaredhq.dashboardandroid.domain.model.ReadinessBand
+import dev.jaredhq.dashboardandroid.domain.model.TodayDaySummary
+import dev.jaredhq.dashboardandroid.domain.model.TodayEvent
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WidgetAction
 
@@ -36,6 +38,28 @@ fun WidgetActionDto.toDomain(): WidgetAction =
 fun HabitDto.toDomain(): Habit =
     Habit(id = id, title = title, doneToday = doneToday)
 
+fun TodayEventDto.toDomain(): TodayEvent = TodayEvent(
+    title = title,
+    startLabel = startLabel,
+    endLabel = endLabel,
+    allDay = allDay,
+    timeLabel = timeLabel,
+    href = href,
+    source = source,
+    taskId = taskId,
+    busy = busy,
+)
+
+fun TodayDaySummaryDto.toDomain(): TodayDaySummary = TodayDaySummary(
+    freeDay = freeDay,
+    hasCalendarBlocks = hasCalendarBlocks,
+    committedMinutes = committedMinutes,
+    freeMinutes = freeMinutes,
+    eventCount = eventCount,
+    nextEventLabel = nextEventLabel?.takeIf { it.isNotBlank() },
+    summary = summary?.takeIf { it.isNotBlank() },
+)
+
 fun TodayPayloadDto.toDomain(): TodayPayload = TodayPayload(
     version = version,
     date = date,
@@ -56,6 +80,8 @@ fun TodayPayloadDto.toDomain(): TodayPayload = TodayPayload(
         habitsRemaining
     },
     warnings = warnings,
+    agenda = agenda.map { it.toDomain() },
+    daySummary = daySummary?.toDomain(),
 )
 
 // ── Reverse mappers (domain -> DTO) ─────────────────────────────────────────
@@ -76,6 +102,28 @@ fun WidgetAction.toDto(): WidgetActionDto =
 
 fun Habit.toDto(): HabitDto = HabitDto(id = id, title = title, doneToday = doneToday)
 
+fun TodayEvent.toDto(): TodayEventDto = TodayEventDto(
+    title = title,
+    startLabel = startLabel,
+    endLabel = endLabel,
+    allDay = allDay,
+    timeLabel = timeLabel,
+    href = href,
+    source = source,
+    taskId = taskId,
+    busy = busy,
+)
+
+fun TodayDaySummary.toDto(): TodayDaySummaryDto = TodayDaySummaryDto(
+    freeDay = freeDay,
+    hasCalendarBlocks = hasCalendarBlocks,
+    committedMinutes = committedMinutes,
+    freeMinutes = freeMinutes,
+    eventCount = eventCount,
+    nextEventLabel = nextEventLabel,
+    summary = summary,
+)
+
 fun TodayPayload.toDto(): TodayPayloadDto = TodayPayloadDto(
     version = version,
     date = date,
@@ -90,6 +138,8 @@ fun TodayPayload.toDto(): TodayPayloadDto = TodayPayloadDto(
     habits = habits.map { it.toDto() },
     habitsRemaining = habitsRemaining,
     warnings = warnings,
+    agenda = agenda.map { it.toDto() },
+    daySummary = daySummary?.toDto(),
 )
 
 fun QuotePayloadDto.toDomain(): QuotePayload = QuotePayload(
@@ -128,3 +178,4 @@ fun FocusStartResponseDto.toDomain(): FocusStartResult = FocusStartResult(
     today = toTodayDto().toDomain(),
     session = session?.toDomain(),
 )
+

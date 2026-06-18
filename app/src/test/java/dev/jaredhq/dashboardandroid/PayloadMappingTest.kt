@@ -175,6 +175,132 @@ class PayloadMappingTest {
     }
 
     @Test
+    fun oldPayloadWithoutAgendaDecodesAsOpenDay() {
+        // A pre-agenda server payload (the current `sample`) carries no agenda or
+        // daySummary — must default to empty/null and read as an open day.
+        val today = json.decodeFromString(TodayPayloadDto.serializer(), sample).toDomain()
+
+        assertTrue(today.agenda.isEmpty())
+        assertNull(today.daySummary)
+        assertTrue(today.busyEvents.isEmpty())
+        // No day-summary data + no busy events ⇒ derived open day.
+        assertTrue(today.isOpenDay)
+    }
+
+    @Test
+    fun newPayloadWithAgendaAndDayShapeMaps() {
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Busy day", "recoveryMode": false,
+              "readiness": { "score": 60, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "agenda": [
+                { "title": "Standup", "startLabel": "09:00", "endLabel": "09:15",
+                  "timeLabel": "09:00–09:15", "href": "/calendar", "source": "Work", "busy": true },
+                { "title": "Lunch hold", "startLabel": "12:00", "endLabel": "13:00",
+                  "busy": false }
+              ],
+              "daySummary": {
+                "freeDay": false, "hasCalendarBlocks": true,
+                "committedMinutes": 75, "freeMinutes": 345,
+                "summary": "1h15m committed · ~5h45m free"
+              },
+              "extraAgendaField": "ignored"
+            }
+        """.trimIndent()
+
+        val today = json.decodeFromString(TodayPayloadDto.serializer(), body).toDomain()
+
+        assertEquals(2, today.agenda.size)
+        val standup = today.agenda.first()
+        assertEquals("Standup", standup.title)
+        assertEquals("Work", standup.source)
+        assertEquals("09:00–09:15", standup.compactTime)
+        assertTrue(standup.busy)
+
+        // Only busy/committed events count as "blocked".
+        assertEquals(1, today.busyEvents.size)
+
+        // daySummary drives the open/blocked read.
+        assertEquals(75, today.daySummary?.committedMinutes)
+        assertTrue(today.daySummary?.hasCalendarBlocks == true)
+        assertTrue(!today.isOpenDay)
+    }
+
+    @Test
+    fun eventDefaultsBusyAndDerivesCompactTimeFromStartEnd() {
+        // Minimal event: only a title and start/end — busy defaults true,
+        // compactTime falls back to "start–end" when no timeLabel is sent.
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "x", "recoveryMode": false,
+              "readiness": { "score": 50, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "agenda": [ { "title": "Focus block", "startLabel": "14:00", "endLabel": "15:00" } ]
+            }
+        """.trimIndent()
+
+        val event = json.decodeFromString(TodayPayloadDto.serializer(), body).toDomain().agenda.single()
+        assertTrue(event.busy)
+        assertNull(event.timeLabel)
+        assertEquals("14:00–15:00", event.compactTime)
+    }
+
+    @Test
+    fun blankDayShapeSummaryMapsToNull() {
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "x", "recoveryMode": false,
+              "readiness": { "score": 50, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "daySummary": { "freeDay": true, "hasCalendarBlocks": false, "summary": "  " }
+            }
+        """.trimIndent()
+
+        val shape = json.decodeFromString(TodayPayloadDto.serializer(), body).toDomain().daySummary
+        assertNull(shape?.summary)
+        assertTrue(shape?.freeDay == true)
+    }
+
+    @Test
+    fun roundTripsAgendaAndDayShapeThroughDto() {
+        val body = """
+            {
+              "version": 1, "date": "2026-06-17", "generatedAt": "x",
+              "headline": "Busy", "recoveryMode": false,
+              "readiness": { "score": 60, "band": "moderate" },
+              "mainAction": null, "focusBlock": null,
+              "bodyAction": { "title": "Move", "detail": null, "href": "/x", "state": "do" },
+              "resetAction": { "title": "Reflect", "detail": null, "href": "/x", "state": "do" },
+              "habits": [], "habitsRemaining": 0, "warnings": [],
+              "agenda": [
+                { "title": "Standup", "startLabel": "09:00", "endLabel": "09:15",
+                  "timeLabel": "09:00–09:15", "href": "/calendar", "source": "Work", "busy": true }
+              ],
+              "daySummary": { "freeDay": false, "hasCalendarBlocks": true,
+                "committedMinutes": 15, "freeMinutes": 400, "summary": "15m committed" }
+            }
+        """.trimIndent()
+
+        val today = json.decodeFromString(TodayPayloadDto.serializer(), body).toDomain()
+        val reEncoded = json.encodeToString(TodayPayloadDto.serializer(), today.toDto())
+        val again = json.decodeFromString(TodayPayloadDto.serializer(), reEncoded).toDomain()
+        assertEquals(today, again)
+    }
+
+    @Test
     fun recomputesHabitsRemainingWhenServerSendsZeroButHabitsRemain() {
         // Defensive mapper branch: server says 0 remaining but two are undone.
         val dto = TodayPayloadDto(
@@ -187,3 +313,4 @@ class PayloadMappingTest {
         assertEquals(2, dto.toDomain().habitsRemaining)
     }
 }
+
