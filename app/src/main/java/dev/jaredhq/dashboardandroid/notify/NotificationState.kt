@@ -19,7 +19,11 @@ class NotificationState(context: Context) {
         prefs.getString(KEY_QUOTE_DATE, null) == date
 
     fun markQuoteShown(date: String) {
-        prefs.edit().putString(KEY_QUOTE_DATE, date).apply()
+        // commit() (synchronous), not apply(): the dedup record must be durable
+        // before the worker finishes. With async apply(), a process death after
+        // the notification posts but before the write reaches disk would re-show
+        // the same item on the next run.
+        prefs.edit().putString(KEY_QUOTE_DATE, date).commit()
     }
 
     fun reminderAlreadyShown(date: String, id: String): Boolean {
@@ -32,7 +36,10 @@ class NotificationState(context: Context) {
         // getStringSet's returned set must not be mutated — copy first.
         val updated = HashSet(prefs.getStringSet(KEY_SHOWN, emptySet())!!)
         updated.add(id)
-        prefs.edit().putStringSet(KEY_SHOWN, updated).apply()
+        // commit() (synchronous), not apply(): see markQuoteShown — the "already
+        // shown" record must survive process death immediately after notifying,
+        // otherwise the reminder posts again on the next worker run.
+        prefs.edit().putStringSet(KEY_SHOWN, updated).commit()
     }
 
     /** Reset the per-day "shown" set when the civil date changes. */

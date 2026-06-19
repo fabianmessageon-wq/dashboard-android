@@ -130,6 +130,8 @@ class DashboardRepository(
         apiProvider()
     } catch (e: ApiException) {
         throw e
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         throw ApiException(0, "Couldn't connect: ${e.message ?: "invalid dashboard URL"}", e)
     }

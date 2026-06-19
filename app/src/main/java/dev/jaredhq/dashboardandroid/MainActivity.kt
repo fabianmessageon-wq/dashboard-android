@@ -67,7 +67,10 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        startRoute.value = intent.getStringExtra(EXTRA_START_ROUTE)
+        // Only overwrite the pending route when this intent actually carries one.
+        // An unrelated intent (no EXTRA_START_ROUTE) must not null out a route
+        // that AppRoot hasn't consumed yet.
+        intent.getStringExtra(EXTRA_START_ROUTE)?.let { startRoute.value = it }
     }
 
     private fun maybeRequestNotificationPermission() {
@@ -176,6 +179,12 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                 val speechLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.StartActivityForResult(),
                 ) { result ->
+                    // Backing out of the recognizer (RESULT_CANCELED) is not an
+                    // error — say nothing. Only a successful recognition that
+                    // produced no usable text warrants the "Didn't catch that" notice.
+                    if (result.resultCode != android.app.Activity.RESULT_OK) {
+                        return@rememberLauncherForActivityResult
+                    }
                     val transcript = result.data
                         ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                         ?.firstOrNull()
@@ -189,6 +198,7 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onInputChange = vm::onInputChange,
                     onToggleAssistant = vm::setUseAssistant,
                     onSend = vm::send,
+                    onDismissSpeechNotice = vm::dismissSpeechNotice,
                     speechAvailable = speechAvailable,
                     onStartSpeech = {
                         if (!speechAvailable) {

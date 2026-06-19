@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.widget
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 import androidx.glance.GlanceId
@@ -157,8 +158,13 @@ class ToggleHabitAction : ActionCallback {
     ) {
         val habitId = parameters[habitIdKey] ?: return
         ServiceLocator.init(context)
+        // Only re-render once the server actually applied the toggle (the
+        // repository refreshes the cache on success). On failure the cache is
+        // untouched, so leave the tile as-is and log rather than silently
+        // implying the toggle stuck.
         ServiceLocator.repository.toggleHabit(habitId)
-        TodayWidget.update(context, glanceId)
+            .onSuccess { TodayWidget.update(context, glanceId) }
+            .onFailure { Log.w(TAG, "Widget habit toggle failed", it) }
     }
 
     companion object {
@@ -177,7 +183,10 @@ class StartFocusAction : ActionCallback {
         val today = ServiceLocator.repository.cachedToday()
         val taskId = today?.focusBlock?.taskId ?: today?.mainAction?.taskId
         ServiceLocator.repository.startFocus(taskId = taskId)
-        TodayWidget.update(context, glanceId)
+            .onSuccess { TodayWidget.update(context, glanceId) }
+            .onFailure { Log.w(TAG, "Widget start-focus failed", it) }
     }
 }
+
+private const val TAG = "TodayWidget"
 
