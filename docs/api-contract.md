@@ -115,6 +115,42 @@ the recommended task on the Today screen, and shows the next block or "Open day"
 on the home-screen widget. `busy` defaults `true`, and a blank `summary` maps to
 `null`.
 
+### Additive: `relevantTasks` (multiple recommended tasks)
+
+Today no longer has to be a single `mainAction`. The server now also emits a
+short, ranked **`relevantTasks`** list — in-progress, overdue/due-today,
+high-priority-goal, and slot-fitting tasks — so a phone can show a few useful
+tasks, not just one. It is **additive and forward-compatible**: older payloads
+omit it, and the Android DTO defaults it to `[]`. `mainAction === relevantTasks[0]`
+when both are present, so a compact widget keeps using `mainAction` while the
+Today screen can render the list.
+
+```jsonc
+{
+  // …all existing Today fields…
+  "mainAction": { "title": "Write proposal", "taskId": 12, "href": "/tasks", "detail": "high-priority goal" },
+  "relevantTasks": [                       // ranked; [] when nothing is queued
+    {
+      "title": "Write proposal",
+      "detail": "high-priority goal · fits a free slot",  // top reason(s); nullable
+      "href": "/tasks",
+      "taskId": 12,
+      "score": 91,                         // 0–100; show the human `detail`, not the number
+      "goalPriority": "high",              // "high" | "medium" | "low" | null
+      "inProgress": false                  // true = actively being worked
+    }
+  ]
+}
+```
+
+The projection is **privacy-safe**: it carries only the task title, a couple of
+human reasons, and routing/identity — never task notes or other private content.
+
+**Android handling:** map to `TodayPayload.relevantTasks: List<TodayTask>` (every
+field nullable/defaulted, unknown `goalPriority` → `UNKNOWN`). The Today screen
+shows the recommended-tasks list (in-progress first); the Glance widget stays
+compact — primary action + next event or `+N more`, not five cards.
+
 ## `GET /api/widget/v1/quote`  — scope: `read`
 
 A deliberately separate, never-blocking lock-screen quote (`WidgetQuote`):

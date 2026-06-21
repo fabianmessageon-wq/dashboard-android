@@ -77,8 +77,12 @@ object Notifier {
             .setContentIntent(openIntent(context, "today"))
             .setAutoCancel(true)
             .build()
+        // Derive a stable per-reminder id from the server item id. A 30-bit mask
+        // (not the old 15-bit one, which collided around ~180 ids) makes distinct
+        // reminders practically never overwrite each other, while staying clear of
+        // Int overflow when offset by REMINDER_ID_BASE.
         NotificationManagerCompat.from(context)
-            .notify(REMINDER_ID_BASE + (item.id.hashCode() and 0x7FFF), n)
+            .notify(REMINDER_ID_BASE + (item.id.hashCode() and 0x3FFFFFFF), n)
     }
 
     fun notifyQuote(context: Context, quote: QuotePayload) {

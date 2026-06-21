@@ -40,6 +40,7 @@ fun CaptureScreen(
     onSend: () -> Unit,
     speechAvailable: Boolean = true,
     onStartSpeech: () -> Unit = {},
+    onDismissSpeechNotice: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -75,13 +76,20 @@ fun CaptureScreen(
         }
 
         state.speechNotice?.let { notice ->
+            // Tapping the notice dismisses it — otherwise it lingers until the
+            // next edit/send (it was previously unreachable from the UI).
             Card(
-                Modifier.fillMaxWidth(),
+                onClick = onDismissSpeechNotice,
+                modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                 ),
             ) {
-                Text(notice, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "$notice  (tap to dismiss)",
+                    Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
 

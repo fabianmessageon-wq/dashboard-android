@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import dev.jaredhq.dashboardandroid.data.api.ApiException
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
 import dev.jaredhq.dashboardandroid.domain.model.NotificationKind
 import dev.jaredhq.dashboardandroid.notify.NotificationState
@@ -43,7 +44,7 @@ class NotificationWorker(
         Notifier.ensureChannels(ctx)
         val state = NotificationState(ctx)
 
-        ServiceLocator.repository.getNotifications().onSuccess { feed ->
+        val notificationsResult = ServiceLocator.repository.getNotifications().onSuccess { feed ->
             for (item in feed.items) {
                 if (item.kind != NotificationKind.EVENT && item.kind != NotificationKind.DEADLINE) {
                     continue
@@ -54,13 +55,27 @@ class NotificationWorker(
             }
         }
 
-        ServiceLocator.repository.getQuote().onSuccess { quote ->
+        val quoteResult = ServiceLocator.repository.getQuote().onSuccess { quote ->
             if (!state.quoteAlreadyShown(quote.date)) {
                 Notifier.notifyQuote(ctx, quote)
                 state.markQuoteShown(quote.date)
             }
         }
 
-        return Result.success()
+        // A transient failure (no network, timeout, 5xx) means we may have skipped
+        // a reminder/quote that should have surfaced. Ask WorkManager to retry with
+        // backoff rather than silently waiting for the next scheduled window. Auth
+        // failures won't fix themselves on retry, so treat those as success.
+        return if (isTransient(notificationsResult) || isTransient(quoteResult)) {
+            Result.retry()
+        } else {
+            Result.success()
+        }
+    }
+
+    private fun isTransient(result: Result<*>): Boolean {
+        val api = result.exceptionOrNull() as? ApiException ?: return false
+        if (api.isAuthError) return false
+        return api.status == 0 || api.status in 500..599
     }
 }

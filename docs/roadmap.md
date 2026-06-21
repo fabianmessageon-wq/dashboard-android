@@ -23,6 +23,17 @@ Compose-BOM version skew the local SDK surfaces. See README "Verification status
 
 ## Next (not yet built)
 
+- **Phone app improvements plan** —
+  [`docs/plans/phone-app-improvements.md`](plans/phone-app-improvements.md).
+  **Dashboard side: ✅ implemented** (task In Progress state + visible chip;
+  Completed Goals section; goal-priority-weighted ranking with an in-progress
+  boost; additive `relevantTasks` + `agenda` on `/today`; recurring workout
+  plans; visible mobile tool-details toggle in chat). Verified on the dashboard
+  with `npm run lint` / `npx tsc --noEmit` / `npm run test:api` (all green).
+  **Android side:** the `relevantTasks` DTO is added (additive, defaulted —
+  decodes old + new payloads), but the domain model / `TodayMapper` / Compose
+  Today UI for the recommended-tasks list are **not yet wired** (and unbuilt —
+  no local JDK/Gradle/SDK). See `api-contract.md` "Additive: `relevantTasks`".
 - **Real-device verification** — run the JVM tests, build, install; exercise the
   Glance widget actions (habit toggle, focus start) and WorkManager refresh on a
   device against a live dashboard over the Tailscale HTTPS URL. Highest priority.

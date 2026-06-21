@@ -10,6 +10,7 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
 
 /**
@@ -53,6 +54,11 @@ class RetrofitDashboardApiClient(
     private inline fun <T> call(block: () -> T): T = try {
         block()
     } catch (e: ApiException) {
+        throw e
+    } catch (e: CancellationException) {
+        // Never translate coroutine cancellation into a "network error" — let it
+        // propagate so cancelled workers, widget actions, and ViewModel scopes
+        // actually stop instead of reporting a bogus success/failure.
         throw e
     } catch (e: HttpException) {
         throw ApiException(e.code(), httpMessage(e.code()), e)

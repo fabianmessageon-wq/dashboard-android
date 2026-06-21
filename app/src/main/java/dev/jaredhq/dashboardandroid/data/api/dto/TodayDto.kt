@@ -31,6 +31,10 @@ data class TodayPayloadDto(
     // predate these (or omit them) still decode unchanged.
     val agenda: List<TodayEventDto> = emptyList(),
     val daySummary: TodayDaySummaryDto? = null,
+    // Additive: a short ranked list of the day's most useful tasks. Defaults to
+    // empty so older payloads (mainAction-only) decode unchanged. When present,
+    // mainAction === relevantTasks[0].
+    val relevantTasks: List<TodayTaskDto> = emptyList(),
 )
 
 @Serializable
@@ -86,6 +90,24 @@ data class TodayEventDto(
     val source: String? = null,
     val taskId: Int? = null,
     val busy: Boolean = true,
+)
+
+/**
+ * One of the day's "Relevant tasks" on `/today`. A privacy-safe projection: a
+ * title, a human reason, routing/identity, and a few ranking hints — never task
+ * notes. All fields optional/defaulted so a partial or renamed payload degrades
+ * instead of failing to decode. `goalPriority` is "high" | "medium" | "low" |
+ * null; an unknown value should map to UNKNOWN downstream rather than throw.
+ */
+@Serializable
+data class TodayTaskDto(
+    val title: String = "",
+    val detail: String? = null,
+    val href: String = "",
+    val taskId: Int = 0,
+    val score: Int = 0,
+    val goalPriority: String? = null,
+    val inProgress: Boolean = false,
 )
 
 /** Day-at-a-glance summary on `/today`. All fields optional; safe "open" defaults. */
@@ -162,6 +184,7 @@ data class FocusStartResponseDto(
     val warnings: List<String> = emptyList(),
     val agenda: List<TodayEventDto> = emptyList(),
     val daySummary: TodayDaySummaryDto? = null,
+    val relevantTasks: List<TodayTaskDto> = emptyList(),
     val session: SessionDto? = null,
 ) {
     fun toTodayDto(): TodayPayloadDto = TodayPayloadDto(
@@ -180,6 +203,7 @@ data class FocusStartResponseDto(
         warnings = warnings,
         agenda = agenda,
         daySummary = daySummary,
+        relevantTasks = relevantTasks,
     )
 }
 
@@ -206,6 +230,7 @@ data class CaptureResponseDto(
     val warnings: List<String> = emptyList(),
     val agenda: List<TodayEventDto> = emptyList(),
     val daySummary: TodayDaySummaryDto? = null,
+    val relevantTasks: List<TodayTaskDto> = emptyList(),
     // Capture/chat metadata.
     val reply: String? = null,
     val actions: List<String> = emptyList(),
@@ -230,6 +255,7 @@ data class CaptureResponseDto(
         warnings = warnings,
         agenda = agenda,
         daySummary = daySummary,
+        relevantTasks = relevantTasks,
     )
 }
 
