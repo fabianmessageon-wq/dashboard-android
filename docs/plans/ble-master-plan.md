@@ -91,7 +91,28 @@ V3 health data type IDs (native):
 
 ## Phase 2: Safe Dashboard Metrics
 
+**Status:** Android side implemented. Dashboard side (API endpoint, schema,
+Settings UI) is tracked in the dashboard repo and out of scope here.
+
 **Objective:** Upload connection/device telemetry to dashboard. No health metrics yet.
+
+**Android implementation (this repo):**
+- `WatchSyncRequest`/`WatchSyncEvent`/`WatchSyncResult` domain models +
+  `WatchSyncDto`/`WatchRawEventDto`/`WatchSyncResponseDto` wire DTOs matching the
+  request body below.
+- `WatchSyncMapper` builds the request from the live `WatchConnectionState`
+  (MAC-preferred device id, lowercase connection-state, ISO-8601 timestamps,
+  developer-only raw handshake events).
+- `WatchPacketLogger` now captures structured `RawEvent`s (TX in
+  `WatchBleManager.writeCommand`, RX in `WatchGattCallback.onCharacteristicChanged`).
+- `DashboardApiClient.syncWatch` → `POST /api/widget/v1/watch/sync`, wired through
+  the Retrofit + Fake clients and `DashboardRepository`.
+- `WatchSyncWorker` uploads the current telemetry; `WatchSyncScheduler` fires it
+  one-off on every connection event (via `WatchBleManager.onConnectionEvent`) and
+  on a 6-hour periodic cadence. A manual "Sync to Dashboard" button on the Watch
+  screen triggers it too.
+- Degrades quietly when unconfigured or with no identifiable device; retries on
+  transient/5xx failures, treats auth failures as terminal.
 
 **Dashboard additions:**
 
@@ -177,9 +198,11 @@ CREATE TABLE watch_raw_events (
 - Watch device card: name, last seen, battery, connection state
 - Developer-only raw event viewer (hidden by default)
 
-**Android additions:**
-- `WatchSyncWorker` auto-uploads connection state changes
-- `WatchSyncDto` already created in Phase 1
+**Android additions:** ✅ done
+- `WatchSyncWorker` auto-uploads connection state changes (via `WatchSyncScheduler`
+  + `WatchBleManager.onConnectionEvent`)
+- `WatchSyncDto` re-shaped to the request body above; request/response domain
+  models and mapper added
 
 ## Phase 3: Health Schema Support
 
@@ -412,10 +435,12 @@ App requests sync (manual or scheduled)
 - [ ] Raw packet log visible
 
 ### Phase 2
-- [ ] Dashboard API accepts watch sync
-- [ ] Device appears in dashboard Settings
-- [ ] Connection history logged
-- [ ] Raw events viewable (developer mode)
+- [x] Android: telemetry DTO/mapper + `syncWatch` API path (unit-tested)
+- [x] Android: `WatchSyncWorker` uploads on connection events + periodically
+- [ ] Dashboard API accepts watch sync *(dashboard repo)*
+- [ ] Device appears in dashboard Settings *(dashboard repo)*
+- [ ] Connection history logged *(dashboard repo)*
+- [ ] Raw events viewable (developer mode) *(dashboard repo)*
 
 ### Phase 3
 - [ ] Health schema migrations run

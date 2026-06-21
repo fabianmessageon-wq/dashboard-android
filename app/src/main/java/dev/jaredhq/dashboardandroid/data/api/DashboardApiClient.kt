@@ -5,6 +5,8 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 
 /**
  * The dashboard server contract, expressed in domain terms. The rest of the app
@@ -55,6 +57,13 @@ interface DashboardApiClient {
 
     /** POST /api/widget/v1/chat { message } -> assistant summary + fresh Today */
     suspend fun chat(message: String): CaptureResult
+
+    /**
+     * POST /api/widget/v1/watch/sync — upload watch connection/device telemetry
+     * (Phase 2 "safe dashboard metrics"; no health data). Returns the server's
+     * acknowledgement.
+     */
+    suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult
 }
 
 /** Thrown by API clients. [status] is the HTTP code when known (0 otherwise). */

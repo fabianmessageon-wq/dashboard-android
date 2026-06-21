@@ -13,6 +13,7 @@ import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import dev.jaredhq.dashboardandroid.ble.WatchBleManager
+import dev.jaredhq.dashboardandroid.work.WatchSyncScheduler
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 
@@ -66,7 +67,11 @@ object ServiceLocator {
                 apiProvider = { makeClient() },
             )
 
-            watchBleManager = WatchBleManager(appContext)
+            watchBleManager = WatchBleManager(appContext).apply {
+                // Auto-upload telemetry whenever the connection state changes
+                // (connect/disconnect/error) — the worker no-ops if unconfigured.
+                onConnectionEvent = { WatchSyncScheduler.syncNow(appContext) }
+            }
 
             initialized = true
         }

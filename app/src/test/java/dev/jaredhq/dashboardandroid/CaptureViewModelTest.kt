@@ -12,6 +12,8 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 import dev.jaredhq.dashboardandroid.ui.capture.CaptureViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -180,6 +182,8 @@ class CaptureViewModelTest {
             createdTaskId = 9,
             mode = CaptureMode.TASK_FALLBACK,
         )
+        override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
+            WatchSyncResult(accepted = true, deviceId = request.deviceId)
     }
 
     /** Every call fails with a given HTTP status (message must not leak to the UI). */
@@ -195,5 +199,6 @@ class CaptureViewModelTest {
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
+        override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult = fail()
     }
 }

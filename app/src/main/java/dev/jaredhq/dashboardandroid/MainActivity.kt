@@ -47,6 +47,7 @@ import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
 import dev.jaredhq.dashboardandroid.ui.watch.WatchScreen
 import dev.jaredhq.dashboardandroid.ui.watch.WatchViewModel
+import dev.jaredhq.dashboardandroid.work.WatchSyncScheduler
 
 class MainActivity : ComponentActivity() {
 
@@ -226,6 +227,7 @@ private fun AppRoot(startRoute: MutableState<String?>) {
             composable(Tab.Watch.route) {
                 val vm: WatchViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
+                val context = LocalContext.current
                 WatchScreen(
                     state = state,
                     onScanClick = vm::startScan,
@@ -233,6 +235,10 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onMacRequest = vm::requestMacAddress,
                     onDeviceInfoRequest = vm::requestDeviceInfo,
                     onStatusRequest = vm::requestStatus,
+                    onSyncClick = {
+                        WatchSyncScheduler.syncNow(context)
+                        vm.onSyncRequested()
+                    },
                     onClearLog = vm::clearLog,
                     onPermissionsGranted = vm::onPermissionsGranted,
                     onPermissionsDenied = vm::onPermissionsDenied,

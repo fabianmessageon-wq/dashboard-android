@@ -8,6 +8,8 @@ import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.NotificationsPayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.QuotePayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.TodayPayloadDto
+import dev.jaredhq.dashboardandroid.data.api.dto.WatchSyncDto
+import dev.jaredhq.dashboardandroid.data.api.dto.WatchSyncResponseDto
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -44,4 +46,7 @@ interface DashboardService {
 
     @POST("api/widget/v1/chat")
     suspend fun chat(@Body body: ChatRequest): CaptureResponseDto
+
+    @POST("api/widget/v1/watch/sync")
+    suspend fun syncWatch(@Body body: WatchSyncDto): WatchSyncResponseDto
 }

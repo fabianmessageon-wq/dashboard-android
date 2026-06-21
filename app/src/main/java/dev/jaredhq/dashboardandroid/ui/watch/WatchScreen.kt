@@ -56,6 +56,7 @@ fun WatchScreen(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onStatusRequest: () -> Unit,
+    onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
     onPermissionsDenied: () -> Unit,
@@ -67,6 +68,7 @@ fun WatchScreen(
         onMacRequest = onMacRequest,
         onDeviceInfoRequest = onDeviceInfoRequest,
         onStatusRequest = onStatusRequest,
+        onSyncClick = onSyncClick,
         onClearLog = onClearLog,
         onPermissionsGranted = onPermissionsGranted,
         onPermissionsDenied = onPermissionsDenied,
@@ -81,6 +83,7 @@ private fun WatchContent(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onStatusRequest: () -> Unit,
+    onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
     onPermissionsDenied: () -> Unit,
@@ -135,6 +138,11 @@ private fun WatchContent(
         // Permission banner
         state.permissionRationale?.let {
             BannerCard(text = it, error = true)
+        }
+
+        // Sync confirmation banner
+        state.syncMessage?.let {
+            BannerCard(text = it, error = false)
         }
 
         // Connection status card
@@ -207,6 +215,14 @@ private fun WatchContent(
 
             // Device info display
             DeviceInfoCard(state.state)
+
+            // Upload connection/device telemetry to the dashboard (Phase 2).
+            Button(
+                onClick = onSyncClick,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Sync to Dashboard")
+            }
         }
 
         // Raw packet log
@@ -344,6 +360,7 @@ private fun PreviewDisconnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onStatusRequest = {},
+            onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},
             onPermissionsDenied = {},
@@ -372,6 +389,7 @@ private fun PreviewConnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onStatusRequest = {},
+            onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},
             onPermissionsDenied = {},
