@@ -268,8 +268,8 @@ class WatchBleManager(private val context: Context) {
                 // Official-app btsnoop showed the first useful post-CCCD probe is the
                 // short 0x02 0x01 request; the previous guessed AB frames only yielded
                 // ACKs. Keep legacy buttons manual, but auto-probe with captured bytes.
-                packetLogger.log("BLE", "Notifications enabled, queueing captured 02:01 status probe")
-                requestCapturedStatusProbe()
+                packetLogger.log("BLE", "Notifications enabled, queueing captured 02:01 status probe burst")
+                requestCapturedStatusProbeBurst()
             },
         )
 
@@ -394,6 +394,24 @@ class WatchBleManager(private val context: Context) {
         val cmd = WatchProtocol.buildCapturedStatusProbeCommand()
         packetLogger.log("TX", "CAPTURED_STATUS_PROBE (02:01): ${cmd.toHex()}")
         writeCommand(cmd)
+    }
+
+    /**
+     * Send a short retry burst of the captured probe. The watch sometimes ignores or
+     * only ACKs the first post-CCCD probe while its app-side status block is still
+     * settling; spaced retries improve first-connect battery reliability without
+     * flooding the GATT queue.
+     */
+    private fun requestCapturedStatusProbeBurst() {
+        val delaysMs = longArrayOf(0L, 1_200L, 3_000L)
+        delaysMs.forEachIndexed { index, delayMs ->
+            mainHandler.postDelayed({
+                if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
+                    packetLogger.log("BLE", "Captured 02:01 probe attempt ${index + 1}/${delaysMs.size}")
+                    requestCapturedStatusProbe()
+                }
+            }, delayMs)
+        }
     }
 
     /** Send an exact tester/capture-provided command frame to 0x0AF6. */
