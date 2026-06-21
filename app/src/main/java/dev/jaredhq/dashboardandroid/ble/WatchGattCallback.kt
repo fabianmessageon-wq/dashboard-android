@@ -160,11 +160,22 @@ class WatchGattCallback(
         // routed there even when AF7 only emits short ACK/status packets.
         // Android GATT has no internal queue; overlapping writes silently fail.
         // onDescriptorWrite chains each step only after the previous one completes.
-        notifyCharacteristic?.let { enableNotification(gatt, it) }
-            ?: secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-            ?: auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+        nextNotifiableAfter(null)?.let { enableNotification(gatt, it) }
             ?: onNotificationsEnabled?.invoke()
     }
+
+    private fun nextNotifiableAfter(previous: BluetoothGattCharacteristic?): BluetoothGattCharacteristic? {
+        val ordered = listOfNotNull(
+            notifyCharacteristic,
+            secondaryNotifyCharacteristic,
+            auxiliaryNotifyCharacteristic,
+        )
+        val startIndex = previous?.let { prev -> ordered.indexOfFirst { it.uuid == prev.uuid } + 1 } ?: 0
+        return ordered.drop(startIndex.coerceAtLeast(0)).firstOrNull { it.isNotifiable() }
+    }
+
+    private fun BluetoothGattCharacteristic.isNotifiable(): Boolean =
+        properties and (BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
 
     override fun onCharacteristicRead(
         gatt: BluetoothGatt,
@@ -219,16 +230,8 @@ class WatchGattCallback(
             else packetLogger.log("GATT", "CCCD write failed for ${descriptor.characteristic.uuid}; continuing notification chain")
 
             // Chain to the next serialized op now that the previous one completed.
-            when (descriptor.characteristic.uuid) {
-                WatchBleManager.NOTIFY_CHARACTERISTIC_UUID ->
-                    secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-                        ?: auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-                        ?: onNotificationsEnabled?.invoke()
-                WatchBleManager.SECONDARY_NOTIFY_UUID ->
-                    auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-                        ?: onNotificationsEnabled?.invoke()
-                WatchBleManager.AUX_NOTIFY_UUID -> onNotificationsEnabled?.invoke()
-            }
+            nextNotifiableAfter(descriptor.characteristic)?.let { enableNotification(gatt, it) }
+                ?: onNotificationsEnabled?.invoke()
         }
     }
 
@@ -251,9 +254,13 @@ class WatchGattCallback(
                 packetLogger.log("GATT", "Writing CCCD ENABLE_NOTIFICATION to ${characteristic.uuid}")
             } else {
                 packetLogger.log("GATT", "No CCCD descriptor on ${characteristic.uuid}")
+                nextNotifiableAfter(characteristic)?.let { enableNotification(gatt, it) }
+                    ?: onNotificationsEnabled?.invoke()
             }
         } catch (e: SecurityException) {
             packetLogger.log("GATT", "SecurityException enabling notification: ${e.message}")
+            nextNotifiableAfter(characteristic)?.let { enableNotification(gatt, it) }
+                ?: onNotificationsEnabled?.invoke()
         }
     }
 

@@ -1,7 +1,11 @@
 package dev.jaredhq.dashboardandroid.ui.watch
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -247,8 +251,27 @@ private fun WatchContent(
                 )
             }
         }
-        OutlinedButton(onClick = onClearLog) {
-            Text("Clear Log")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Watch raw packet log", state.rawLog))
+                    Toast.makeText(context, "Raw packet log copied", Toast.LENGTH_SHORT).show()
+                },
+                enabled = state.rawLog.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Copy Logs")
+            }
+            OutlinedButton(
+                onClick = onClearLog,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Clear Log")
+            }
         }
 
         Spacer(Modifier.height(8.dp))
