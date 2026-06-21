@@ -91,6 +91,20 @@ class WatchProtocolTest {
         assertTrue(desc.contains("no payload"))
     }
 
+    @Test
+    fun parseHexCommand_acceptsCopiedCaptureFormats() {
+        assertArrayEquals(
+            byteArrayOf(0xAB.toByte(), 0x01, 0x41, 0x01, 0x00, 0x00, 0x00, 0xC3.toByte(), 0xF7.toByte()),
+            WatchProtocol.parseHexCommand("AB 01:41-01,00 00 00 C3 F7")!!,
+        )
+    }
+
+    @Test
+    fun parseHexCommand_rejectsInvalidInput() {
+        assertNull(WatchProtocol.parseHexCommand("AB 01 4"))
+        assertNull(WatchProtocol.parseHexCommand("not hex"))
+    }
+
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
         org.junit.Assert.assertArrayEquals(expected, actual)
     }

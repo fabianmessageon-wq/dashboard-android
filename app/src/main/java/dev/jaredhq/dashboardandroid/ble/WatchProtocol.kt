@@ -148,6 +148,21 @@ object WatchProtocol {
     fun buildDeviceInfoCommand(): ByteArray = buildRequestFrame(DATA_TYPE_BASIC_INFO)
     fun buildFirmwareStatusCommand(): ByteArray = buildRequestFrame(DATA_TYPE_FIRMWARE_STATUS)
 
+    /** Parse tester-entered hex such as `AB 01 41 01 00 00 00 C3 F7` into bytes. */
+    fun parseHexCommand(input: String): ByteArray? {
+        val cleaned = input
+            .replace("0x", "", ignoreCase = true)
+            .filter { !it.isWhitespace() && it != ':' && it != '-' && it != ',' }
+        if (cleaned.isEmpty() || cleaned.length % 2 != 0) return null
+        return try {
+            ByteArray(cleaned.length / 2) { index ->
+                cleaned.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+            }
+        } catch (_: NumberFormatException) {
+            null
+        }
+    }
+
     // ── Inbound frame parsing ────────────────────────────────────────────────────
 
     /**

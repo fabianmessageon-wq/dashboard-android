@@ -28,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +62,8 @@ fun WatchScreen(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onRawCommandChange: (String) -> Unit,
+    onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -73,6 +76,8 @@ fun WatchScreen(
         onMacRequest = onMacRequest,
         onDeviceInfoRequest = onDeviceInfoRequest,
         onBatteryInfoRequest = onBatteryInfoRequest,
+        onRawCommandChange = onRawCommandChange,
+        onRawCommandSend = onRawCommandSend,
         onSyncClick = onSyncClick,
         onClearLog = onClearLog,
         onPermissionsGranted = onPermissionsGranted,
@@ -88,6 +93,8 @@ private fun WatchContent(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onRawCommandChange: (String) -> Unit,
+    onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -216,6 +223,21 @@ private fun WatchContent(
                 OutlinedButton(onClick = onBatteryInfoRequest, modifier = Modifier.weight(1f)) {
                     Text("Battery (321)")
                 }
+            }
+
+            OutlinedTextField(
+                value = state.rawCommandHex,
+                onValueChange = onRawCommandChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Raw hex command") },
+                placeholder = { Text("AB 01 41 01 00 00 00 C3 F7") },
+            )
+            OutlinedButton(
+                onClick = onRawCommandSend,
+                enabled = state.rawCommandHex.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Send Raw Hex")
             }
 
             // Device info display
@@ -386,6 +408,8 @@ private fun PreviewDisconnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onRawCommandChange = {},
+            onRawCommandSend = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},
@@ -415,6 +439,8 @@ private fun PreviewConnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onRawCommandChange = {},
+            onRawCommandSend = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},

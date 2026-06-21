@@ -392,6 +392,16 @@ class WatchBleManager(private val context: Context) {
         writeCommand(cmd)
     }
 
+    /** Send an exact tester/capture-provided command frame to 0x0AF6. */
+    fun sendDebugHexCommand(hex: String): Boolean {
+        val cmd = WatchProtocol.parseHexCommand(hex) ?: run {
+            packetLogger.log("TX", "Invalid raw hex command: $hex")
+            return false
+        }
+        packetLogger.log("TX", "RAW_HEX debug command: ${cmd.toHex()}")
+        return writeCommand(cmd)
+    }
+
     /**
      * Centralized lifecycle-state apply: records connect/disconnect timestamps and
      * notifies [onConnectionEvent] so the app can sync telemetry. Only the GATT
