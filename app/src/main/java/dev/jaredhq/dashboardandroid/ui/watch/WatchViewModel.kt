@@ -18,6 +18,7 @@ data class WatchUiState(
     val rawLog: String = "",
     val hasPermissions: Boolean = false,
     val permissionRationale: String? = null,
+    val rawCommandHex: String = "",
     /** Transient confirmation shown after the user queues a dashboard sync. */
     val syncMessage: String? = null,
 )
@@ -84,6 +85,25 @@ class WatchViewModel(
     fun requestBatteryInfo() {
         bleManager.requestBatteryInfo()
         _state.update { it.copy(rawLog = bleManager.logger.format()) }
+    }
+
+    fun requestCapturedStatusProbe() {
+        bleManager.requestCapturedStatusProbe()
+        _state.update { it.copy(rawLog = bleManager.logger.format()) }
+    }
+
+    fun onRawCommandHexChange(value: String) {
+        _state.update { it.copy(rawCommandHex = value) }
+    }
+
+    fun sendRawCommand() {
+        val sent = bleManager.sendDebugHexCommand(_state.value.rawCommandHex)
+        _state.update {
+            it.copy(
+                rawLog = bleManager.logger.format(),
+                syncMessage = if (sent) "Raw command queued" else "Invalid raw hex command",
+            )
+        }
     }
 
     /**

@@ -1,7 +1,11 @@
 package dev.jaredhq.dashboardandroid.ui.watch
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,6 +62,9 @@ fun WatchScreen(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onCapturedStatusProbe: () -> Unit,
+    onRawCommandChange: (String) -> Unit,
+    onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -69,6 +77,9 @@ fun WatchScreen(
         onMacRequest = onMacRequest,
         onDeviceInfoRequest = onDeviceInfoRequest,
         onBatteryInfoRequest = onBatteryInfoRequest,
+        onCapturedStatusProbe = onCapturedStatusProbe,
+        onRawCommandChange = onRawCommandChange,
+        onRawCommandSend = onRawCommandSend,
         onSyncClick = onSyncClick,
         onClearLog = onClearLog,
         onPermissionsGranted = onPermissionsGranted,
@@ -84,6 +95,9 @@ private fun WatchContent(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onCapturedStatusProbe: () -> Unit,
+    onRawCommandChange: (String) -> Unit,
+    onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -214,6 +228,28 @@ private fun WatchContent(
                 }
             }
 
+            OutlinedButton(
+                onClick = onCapturedStatusProbe,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Captured Probe (02:01)")
+            }
+
+            OutlinedTextField(
+                value = state.rawCommandHex,
+                onValueChange = onRawCommandChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Raw hex command") },
+                placeholder = { Text("AB 01 41 01 00 00 00 C3 F7") },
+            )
+            OutlinedButton(
+                onClick = onRawCommandSend,
+                enabled = state.rawCommandHex.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Send Raw Hex")
+            }
+
             // Device info display
             DeviceInfoCard(state.state)
 
@@ -247,8 +283,27 @@ private fun WatchContent(
                 )
             }
         }
-        OutlinedButton(onClick = onClearLog) {
-            Text("Clear Log")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Watch raw packet log", state.rawLog))
+                    Toast.makeText(context, "Raw packet log copied", Toast.LENGTH_SHORT).show()
+                },
+                enabled = state.rawLog.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Copy Logs")
+            }
+            OutlinedButton(
+                onClick = onClearLog,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Clear Log")
+            }
         }
 
         Spacer(Modifier.height(8.dp))
@@ -363,6 +418,9 @@ private fun PreviewDisconnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onCapturedStatusProbe = {},
+            onRawCommandChange = {},
+            onRawCommandSend = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},
@@ -392,6 +450,9 @@ private fun PreviewConnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onCapturedStatusProbe = {},
+            onRawCommandChange = {},
+            onRawCommandSend = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},

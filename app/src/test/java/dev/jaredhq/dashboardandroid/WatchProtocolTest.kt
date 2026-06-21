@@ -91,6 +91,48 @@ class WatchProtocolTest {
         assertTrue(desc.contains("no payload"))
     }
 
+    @Test
+    fun parseHexCommand_acceptsCopiedCaptureFormats() {
+        assertArrayEquals(
+            byteArrayOf(0xAB.toByte(), 0x01, 0x41, 0x01, 0x00, 0x00, 0x00, 0xC3.toByte(), 0xF7.toByte()),
+            WatchProtocol.parseHexCommand("AB 01:41-01,00 00 00 C3 F7")!!,
+        )
+    }
+
+    @Test
+    fun parseHexCommand_rejectsInvalidInput() {
+        assertNull(WatchProtocol.parseHexCommand("AB 01 4"))
+        assertNull(WatchProtocol.parseHexCommand("not hex"))
+    }
+
+    @Test
+    fun capturedStatusProbe_matchesOfficialCaptureCommand() {
+        assertArrayEquals(byteArrayOf(0x02, 0x01), WatchProtocol.buildCapturedStatusProbeCommand())
+    }
+
+    @Test
+    fun parseBatteryInfoFromCapturedStatus_readsObservedBatteryByte() {
+        val response = byteArrayOf(
+            0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x01, 0x00, 0x5F,
+            0x01, 0x00, 0x01, 0x00, 0x5A, 0x02, 0x02, 0x03, 0x06, 0x00,
+        )
+        val info = WatchProtocol.parseBatteryInfoFromCapturedStatus(response)
+        assertNotNull(info)
+        info!!
+        assertEquals(95, info.level)
+        assertEquals(0, info.voltage)
+    }
+
+    @Test
+    fun capturedDaAdFrame_isRecognisedWithoutMisparsingAsOldFrame() {
+        val response = byteArrayOf(
+            0x33, 0xDA.toByte(), 0xAD.toByte(), 0xDA.toByte(), 0xAD.toByte(), 0x01, 0x1D, 0x00,
+            0x01, 0x40, 0x33, 0x00, 0x10, 0x00, 0x00, 0x00,
+        )
+        assertTrue(WatchProtocol.looksLikeCapturedDaAdFrame(response))
+        assertTrue(WatchProtocol.describeCapturedDaAdFrame(response).contains("declaredLen=29"))
+    }
+
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
         org.junit.Assert.assertArrayEquals(expected, actual)
     }

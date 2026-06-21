@@ -235,6 +235,9 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onMacRequest = vm::requestMacAddress,
                     onDeviceInfoRequest = vm::requestDeviceInfo,
                     onBatteryInfoRequest = vm::requestBatteryInfo,
+                    onCapturedStatusProbe = vm::requestCapturedStatusProbe,
+                    onRawCommandChange = vm::onRawCommandHexChange,
+                    onRawCommandSend = vm::sendRawCommand,
                     onSyncClick = {
                         WatchSyncScheduler.syncNow(context)
                         vm.onSyncRequested()
