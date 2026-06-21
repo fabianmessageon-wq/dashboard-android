@@ -9,6 +9,16 @@
          if the user declines. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- BLE permissions — Android 12+ (API 31) uses BLUETOOTH_SCAN / BLUETOOTH_CONNECT.
+         Runtime-requested on the Watch tab; BLUETOOTH / BLUETOOTH_ADMIN are for API < 31. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- NEARBY_DEVICES is implicitly covered by BLUETOOTH_SCAN / BLUETOOTH_CONNECT on Android 12+. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
     <!-- Capture dictation uses the platform speech recognizer via
          RecognizerIntent.ACTION_RECOGNIZE_SPEECH. The recognizer app owns the
          microphone, so this app requests NO RECORD_AUDIO. This <queries> entry

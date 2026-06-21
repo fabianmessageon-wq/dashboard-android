@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Today
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -44,6 +45,8 @@ import dev.jaredhq.dashboardandroid.ui.settings.SettingsViewModel
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
+import dev.jaredhq.dashboardandroid.ui.watch.WatchScreen
+import dev.jaredhq.dashboardandroid.ui.watch.WatchViewModel
 
 class MainActivity : ComponentActivity() {
 
@@ -86,7 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Intent extra carrying a tab route ("today" | "capture" | "settings"). */
+        /** Intent extra carrying a tab route ("today" | "capture" | "watch" | "settings"). */
         const val EXTRA_START_ROUTE = "start_route"
         private const val RC_NOTIFICATIONS = 4011
     }
@@ -95,6 +98,7 @@ class MainActivity : ComponentActivity() {
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Today("today", "Today", Icons.Filled.Today),
     Capture("capture", "Capture", Icons.Filled.Add),
+    Watch("watch", "Watch", Icons.Filled.Bluetooth),
     Settings("settings", "Settings", Icons.Filled.Settings),
 }
 
@@ -217,6 +221,21 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                                 .onFailure { vm.onSpeechUnavailable() }
                         }
                     },
+                )
+            }
+            composable(Tab.Watch.route) {
+                val vm: WatchViewModel = viewModel(factory = factory)
+                val state by vm.state.collectAsStateWithLifecycle()
+                WatchScreen(
+                    state = state,
+                    onScanClick = vm::startScan,
+                    onDisconnectClick = vm::disconnect,
+                    onMacRequest = vm::requestMacAddress,
+                    onDeviceInfoRequest = vm::requestDeviceInfo,
+                    onStatusRequest = vm::requestStatus,
+                    onClearLog = vm::clearLog,
+                    onPermissionsGranted = vm::onPermissionsGranted,
+                    onPermissionsDenied = vm::onPermissionsDenied,
                 )
             }
             composable(Tab.Settings.route) {

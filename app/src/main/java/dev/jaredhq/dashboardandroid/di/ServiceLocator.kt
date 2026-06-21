@@ -12,6 +12,7 @@ import dev.jaredhq.dashboardandroid.data.cache.room.RoomTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
+import dev.jaredhq.dashboardandroid.ble.WatchBleManager
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 
@@ -39,6 +40,9 @@ object ServiceLocator {
     lateinit var repository: DashboardRepository
         private set
 
+    lateinit var watchBleManager: WatchBleManager
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -61,6 +65,8 @@ object ServiceLocator {
                 cache = cache,
                 apiProvider = { makeClient() },
             )
+
+            watchBleManager = WatchBleManager(appContext)
 
             initialized = true
         }
