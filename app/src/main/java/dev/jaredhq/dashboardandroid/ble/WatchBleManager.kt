@@ -456,6 +456,9 @@ class WatchBleManager(private val context: Context) {
         /** Notify characteristic: 0x0AF7 */
         val NOTIFY_CHARACTERISTIC_UUID: UUID = UUID.fromString("00000af7-0000-1000-8000-00805f9b34fb")
 
+        /** Auxiliary notify characteristic observed after firmware update: 0x0AF1 */
+        val AUX_NOTIFY_UUID: UUID = UUID.fromString("00000af1-0000-1000-8000-00805f9b34fb")
+
         /** Secondary notify characteristic: 0x0AF2 */
         val SECONDARY_NOTIFY_UUID: UUID = UUID.fromString("00000af2-0000-1000-8000-00805f9b34fb")
 

@@ -205,6 +205,32 @@ object WatchProtocol {
         return ParsedFrame(head, cmd, key, seq, version, declaredLen, payload, crcReceived, crcCcitt, crcArc)
     }
 
+    /**
+     * Human-readable description for short 6-byte notifications observed from the
+     * updated watch firmware, e.g. `AD 01 32 00 00 00`. These are too short to
+     * include a CRC or battery payload; they look like transport status/ACK packets.
+     */
+    fun describeShortStatus(data: ByteArray): String {
+        if (data.size >= 6) {
+            val head = data[0].toInt() and 0xFF
+            val cmd = data[1].toInt() and 0xFF
+            val key = data[2].toInt() and 0xFF
+            val status0 = data[3].toInt() and 0xFF
+            val status1 = data[4].toInt() and 0xFF
+            val status2 = data[5].toInt() and 0xFF
+            return "Short status/ACK (no payload): head=0x%02X cmd=0x%02X key=0x%02X status=%02X %02X %02X raw=%s".format(
+                head,
+                cmd,
+                key,
+                status0,
+                status1,
+                status2,
+                data.toHex(),
+            )
+        }
+        return "Short/non-frame notification (needs capture): ${data.toHex()}"
+    }
+
     // ── Battery extraction (two independent, clearly-labelled strategies) ─────────
 
     /**
