@@ -73,7 +73,7 @@ class NotificationWorker(
         }
     }
 
-    private fun isTransient(result: Result<*>): Boolean {
+    private fun isTransient(result: kotlin.Result<*>): Boolean {
         val api = result.exceptionOrNull() as? ApiException ?: return false
         if (api.isAuthError) return false
         return api.status == 0 || api.status in 500..599
