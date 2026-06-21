@@ -148,6 +148,9 @@ object WatchProtocol {
     fun buildDeviceInfoCommand(): ByteArray = buildRequestFrame(DATA_TYPE_BASIC_INFO)
     fun buildFirmwareStatusCommand(): ByteArray = buildRequestFrame(DATA_TYPE_FIRMWARE_STATUS)
 
+    /** Capture-observed VeryFit request that produced real 0x0AF7 data after CCCDs. */
+    fun buildCapturedStatusProbeCommand(): ByteArray = byteArrayOf(0x02, 0x01)
+
     /** Parse tester-entered hex such as `AB 01 41 01 00 00 00 C3 F7` into bytes. */
     fun parseHexCommand(input: String): ByteArray? {
         val cleaned = input
@@ -246,6 +249,20 @@ object WatchProtocol {
         return "Short/non-frame notification (needs capture): ${data.toHex()}"
     }
 
+    fun looksLikeCapturedDaAdFrame(data: ByteArray): Boolean =
+        data.size >= 8 &&
+            data[0] == 0x33.toByte() &&
+            data[1] == 0xDA.toByte() &&
+            data[2] == 0xAD.toByte() &&
+            data[3] == 0xDA.toByte() &&
+            data[4] == 0xAD.toByte()
+
+    fun describeCapturedDaAdFrame(data: ByteArray): String {
+        if (!looksLikeCapturedDaAdFrame(data)) return "Not a captured 33 DA AD frame: ${data.toHex()}"
+        val declaredLen = (data[6].toInt() and 0xFF) or ((data[7].toInt() and 0xFF) shl 8)
+        return "Captured 33 DA AD frame: declaredLen=$declaredLen raw=${data.toHex()}"
+    }
+
     // ── Battery extraction (two independent, clearly-labelled strategies) ─────────
 
     /**
@@ -267,6 +284,28 @@ object WatchProtocol {
             0
         }
         return WatchBatteryInfo(level = level, status = status, voltage = voltage, mode = 0)
+    }
+
+    /**
+     * Parse the capture-observed response to `WRITE 0x0AF6: 02 01`.
+     *
+     * Observed notification:
+     * `02 01 D8 1E 01 01 00 5F 01 00 01 00 5A 02 02 03 06 00`.
+     * Byte 7 (`0x5F` = 95) is the only plausible battery percentage in the stable
+     * status block; keep this labelled as capture-derived until more samples confirm
+     * the surrounding fields.
+     */
+    fun parseBatteryInfoFromCapturedStatus(payload: ByteArray): WatchBatteryInfo? {
+        if (payload.size < 8) return null
+        if (payload[0] != 0x02.toByte() || payload[1] != 0x01.toByte()) return null
+        val level = payload[7].toInt() and 0xFF
+        if (level !in 0..100) return null
+        return WatchBatteryInfo(
+            level = level,
+            status = WatchBatteryInfo.BATTERY_STATE_NORMAL,
+            voltage = 0,
+            mode = 0,
+        )
     }
 
     /**

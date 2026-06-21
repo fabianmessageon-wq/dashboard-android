@@ -265,14 +265,11 @@ class WatchBleManager(private val context: Context) {
                 if (!writeInProgress && pendingCommands.isEmpty()) onConnectionEvent?.invoke()
             },
             onNotificationsEnabled = {
-                // After both notification channels are enabled, run the safest small
-                // probe sequence. Writes must be queued; Android GATT drops/denies
-                // overlapping writes, which made earlier manual multi-button testing
-                // look like the watch was not returning data.
-                packetLogger.log("BLE", "Notifications enabled, queueing basic probe commands")
-                requestBatteryInfo()
-                requestMacAddress()
-                requestDeviceInfo()
+                // Official-app btsnoop showed the first useful post-CCCD probe is the
+                // short 0x02 0x01 request; the previous guessed AB frames only yielded
+                // ACKs. Keep legacy buttons manual, but auto-probe with captured bytes.
+                packetLogger.log("BLE", "Notifications enabled, queueing captured 02:01 status probe")
+                requestCapturedStatusProbe()
             },
         )
 
@@ -389,6 +386,13 @@ class WatchBleManager(private val context: Context) {
     fun requestFirmwareStatus() {
         val cmd = WatchProtocol.buildFirmwareStatusCommand()
         packetLogger.log("TX", "CMD_GET_FIRMWARE_STATUS (348): ${cmd.toHex()}")
+        writeCommand(cmd)
+    }
+
+    /** Send the official-capture status probe: WRITE 0x0AF6 `02 01`. */
+    fun requestCapturedStatusProbe() {
+        val cmd = WatchProtocol.buildCapturedStatusProbeCommand()
+        packetLogger.log("TX", "CAPTURED_STATUS_PROBE (02:01): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 

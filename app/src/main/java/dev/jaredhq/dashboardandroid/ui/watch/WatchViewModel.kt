@@ -87,6 +87,11 @@ class WatchViewModel(
         _state.update { it.copy(rawLog = bleManager.logger.format()) }
     }
 
+    fun requestCapturedStatusProbe() {
+        bleManager.requestCapturedStatusProbe()
+        _state.update { it.copy(rawLog = bleManager.logger.format()) }
+    }
+
     fun onRawCommandHexChange(value: String) {
         _state.update { it.copy(rawCommandHex = value) }
     }

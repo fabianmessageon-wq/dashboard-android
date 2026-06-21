@@ -62,6 +62,7 @@ fun WatchScreen(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onCapturedStatusProbe: () -> Unit,
     onRawCommandChange: (String) -> Unit,
     onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
@@ -76,6 +77,7 @@ fun WatchScreen(
         onMacRequest = onMacRequest,
         onDeviceInfoRequest = onDeviceInfoRequest,
         onBatteryInfoRequest = onBatteryInfoRequest,
+        onCapturedStatusProbe = onCapturedStatusProbe,
         onRawCommandChange = onRawCommandChange,
         onRawCommandSend = onRawCommandSend,
         onSyncClick = onSyncClick,
@@ -93,6 +95,7 @@ private fun WatchContent(
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
+    onCapturedStatusProbe: () -> Unit,
     onRawCommandChange: (String) -> Unit,
     onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
@@ -223,6 +226,13 @@ private fun WatchContent(
                 OutlinedButton(onClick = onBatteryInfoRequest, modifier = Modifier.weight(1f)) {
                     Text("Battery (321)")
                 }
+            }
+
+            OutlinedButton(
+                onClick = onCapturedStatusProbe,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Captured Probe (02:01)")
             }
 
             OutlinedTextField(
@@ -408,6 +418,7 @@ private fun PreviewDisconnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onCapturedStatusProbe = {},
             onRawCommandChange = {},
             onRawCommandSend = {},
             onSyncClick = {},
@@ -439,6 +450,7 @@ private fun PreviewConnected() {
             onMacRequest = {},
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
+            onCapturedStatusProbe = {},
             onRawCommandChange = {},
             onRawCommandSend = {},
             onSyncClick = {},

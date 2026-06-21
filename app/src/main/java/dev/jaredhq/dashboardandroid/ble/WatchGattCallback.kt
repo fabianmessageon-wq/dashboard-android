@@ -292,7 +292,20 @@ class WatchGattCallback(
             return
         }
 
-        // 2) Binary IDO V3 frame path. Log the structured breakdown first.
+        // 2) Capture-observed VeryFit status path. This is the first watch-verified
+        // command/response pair from the official-app btsnoop: WRITE 02 01 -> AF7
+        // status block containing a plausible battery byte.
+        WatchProtocol.parseBatteryInfoFromCapturedStatus(value)?.let {
+            packetLogger.log("PARSE", "Battery (captured 02:01 status): level=${it.level}%")
+            onBatteryInfo(it)
+            return
+        }
+        if (WatchProtocol.looksLikeCapturedDaAdFrame(value)) {
+            packetLogger.log("FRAME", WatchProtocol.describeCapturedDaAdFrame(value))
+            return
+        }
+
+        // 3) Binary IDO V3 frame path. Log the structured breakdown first.
         val frame = WatchProtocol.parseFrame(value)
         if (frame == null) {
             packetLogger.log("PARSE", WatchProtocol.describeShortStatus(value))
