@@ -4,6 +4,33 @@
 
 Build a minimal BLE proof-of-concept in dashboard-android that can connect to the Kogan Active 4 Pro smartwatch (VeryFit/IDO BLE protocol), perform basic protocol handshake, read battery, and log raw events.
 
+> ## ⚠ Correction (2026-06-21) — read before implementing
+>
+> This plan was written before the native protocol boundary was confirmed. Two of
+> its original assumptions are **superseded**; the current `ble/` source no longer
+> follows them. Apply these corrections wherever the steps below still say "02:04"
+> or "0x180F":
+>
+> 1. **No raw `02:04`/`02:02`/`02:07` two-byte commands.** The official app does not
+>    hand-write short commands; it calls `Protocol.WriteJsonData(json, type)` and the
+>    **native lib (`libVeryFitMulti.so`) frames the bytes into a binary IDO packet**
+>    before the GATT write. Inbound notifications are fed back as **raw binary** via
+>    `Protocol.ReceiveDatafromBle(byte[])` and decoded to JSON in native
+>    (`CallBackJsonData`). **JSON exists only at the Java↔native boundary — the BLE
+>    wire carries binary IDO frames, never JSON and never ad-hoc 2-byte opcodes.**
+>    The exact frame `head/cmd/key/seq/len/CRC` and the per-request cmd/key are
+>    **unverified** (the `02:04` came from a capture session that is not present in
+>    this repo) and require a focused BLE capture to lock down. `WatchProtocol.kt`
+>    now builds a binary IDO V3 frame and is explicitly marked UNVERIFIED.
+> 2. **Battery does not come from the standard Battery Service.** `0x180F`/`0x2A19`
+>    is only "if the watch exposes it"; on this watch it was not a reliable source,
+>    so the implementation **removed the 0x180F read** and requests battery over the
+>    IDO protocol instead (native data-type `321`, frame unverified). The watch may
+>    also push battery unsolicited on connect.
+>
+> What remains correct: the UUIDs, the connect→MTU→notify(0x0AF7/0x0AF2)→write(0x0AF6)
+> sequence, the developer raw-event logger, and the Phase 2 telemetry upload.
+
 ## Context
 
 - **Watch:** Kogan Active 4 Pro, uses VeryFit protocol (IDO BLE SDK)
@@ -21,8 +48,12 @@ Build a minimal BLE proof-of-concept in dashboard-android that can connect to th
 | Secondary notify | `00000aF2-0000-1000-8000-00805f9b34fb` |
 | Extra/encryption | `00000aF8-0000-1000-8000-00805f9b34fb` |
 | CCCD | `00002902-0000-1000-8000-00805f9b34fb` |
-| Battery service | `0000180F-0000-1000-8000-00805f9b34fb` |
-| Battery characteristic | `00002A19-0000-1000-8000-00805f9b34fb` |
+| Battery service *(only if exposed — see note)* | `0000180F-0000-1000-8000-00805f9b34fb` |
+| Battery characteristic *(only if exposed — see note)* | `00002A19-0000-1000-8000-00805f9b34fb` |
+
+> The standard Battery Service is listed because the APK references it generically,
+> **not** because the Active 4 Pro reliably exposes it. The implementation does not
+> depend on it; battery is requested over the IDO protocol. See the Correction above.
 
 ## Phase 1 Objectives
 
@@ -30,8 +61,10 @@ Build a minimal BLE proof-of-concept in dashboard-android that can connect to th
 2. Discover service `0x0AF0`
 3. Request MTU 517, expect negotiated 247
 4. Enable notifications on `0x0AF7` and `0x0AF2`
-5. Write `02:04` command to `0x0AF6`, confirm MAC response
-6. Read battery via standard GATT `0x180F`
+5. ~~Write `02:04` command to `0x0AF6`, confirm MAC response~~ → Write a **binary IDO
+   V3 frame** to `0x0AF6` (request cmd/key UNVERIFIED — capture-gated; see Correction)
+6. ~~Read battery via standard GATT `0x180F`~~ → Request battery over the **IDO
+   protocol** and parse the binary notification; do **not** depend on `0x180F`
 7. Log raw protocol events (developer-only)
 8. Display connection status and basic telemetry in UI
 
@@ -44,7 +77,7 @@ app/src/main/java/dev/jaredhq/dashboardandroid/
 ├── ble/
 │   ├── WatchBleManager.kt          # High-level manager: scan, connect, sync
 │   ├── WatchGattCallback.kt        # BluetoothGattCallback implementation
-│   ├── WatchProtocol.kt            # Command builders (02:04, 02:02, etc.)
+│   ├── WatchProtocol.kt            # Binary IDO V3 frame builders/parsers (cmd/key UNVERIFIED)
 │   ├── WatchPacketLogger.kt        # Raw packet logging (developer-only)
 │   └── WatchConnectionState.kt     # Sealed class for UI state
 ├── data/api/dto/
@@ -92,20 +125,27 @@ Runtime permission handling for Android 12+ (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNEC
 
 `WatchGattCallback` (extends `BluetoothGattCallback`):
 - `onConnectionStateChange`: track CONNECTED/DISCONNECTED
-- `onServicesDiscovered`: find `0x0AF0`, read battery `0x180F`
-- `onCharacteristicChanged` (notification): log to `WatchPacketLogger`
+- `onServicesDiscovered`: find `0x0AF0`, enable notifications (no `0x180F` battery read)
+- `onCharacteristicChanged` (notification): log raw bytes, parse the binary IDO frame
+  (structured breakdown), extract battery from the payload
 - `onMtuChanged`: record negotiated MTU
-- `onDescriptorWrite`: confirm CCCD enabled
-- `onCharacteristicRead`: parse battery level
+- `onDescriptorWrite`: confirm CCCD enabled, then issue the battery request
 
 ### Step 4: Protocol Commands
 
-`WatchProtocol`:
-- `buildCommand02_04(): ByteArray` → `byteArrayOf(0x02, 0x04)` — returns watch MAC
-- `buildCommand02_02(): ByteArray` → `byteArrayOf(0x02, 0x02)` — device info
-- `buildCommand02_07(): ByteArray` → `byteArrayOf(0x02, 0x07)` — status
-- `buildEnableNotify(): ByteArray` → `byteArrayOf(0x01, 0x00)` for CCCD
-- MAC parser: extracts 6-byte MAC from doubled response
+> **Superseded.** The original `byteArrayOf(0x02, 0x04)` opcodes do not match the
+> real transport (native frames binary IDO packets — see Correction). The shipped
+> `WatchProtocol` instead:
+
+- `buildRequestFrame(dataType)` → assembles a binary IDO V3 frame
+  `head | cmd | key | seq | version | len | payload | crc16` — **UNVERIFIED**
+  head byte and cmd/key, retained so a frame can be diffed against a capture.
+- `buildBatteryInfoCommand()` / `buildMacAddressCommand()` / `buildDeviceInfoCommand()`
+  → typed wrappers over `buildRequestFrame` (native data-types 321 / 301 / 300).
+- `parseFrame(bytes)` → structured view (head/cmd/key/len/payload/CRC, both CRC16
+  variants) for capture-confirmation logging.
+- `parseBatteryInfoFromBinary` (heuristic) + `parseBatteryInfoFromJson` (defensive
+  fallback) — battery surfaces whenever either succeeds.
 
 ### Step 5: Packet Logger
 
@@ -121,8 +161,9 @@ Add 4th "Watch" tab to `MainActivity` bottom navigation (using `Icons.Filled.Blu
 `WatchScreen` shows:
 - Scan button (with permission rationale if needed)
 - Connection status card (disconnected/scanning/connecting/connected/error)
-- Device info: name, MAC address, battery %, MTU
-- Command buttons: Send 02:04, Send 02:02, Send 02:07
+- Device info: name, MAC address, battery % (status/voltage), MTU
+- Command buttons: Battery (321), Info (300), MAC (301) — each sends a binary IDO
+  frame (UNVERIFIED cmd/key), not a raw 2-byte opcode
 - Last command sent + last response received (hex)
 - Raw packet log viewer (scrollable, developer-only)
 - Disconnect button
@@ -166,10 +207,14 @@ Upload endpoint: `POST /api/widget/v1/watch/sync` (dashboard side to be implemen
 6. Verify "Active 4 Pro" appears in scan results
 7. Tap Connect
 8. Verify status changes: scanning → connecting → connected
-9. Verify battery % appears from `0x180F`
-10. Verify MTU shows 247
-11. Tap "Send 02:04", verify MAC response logged
-12. Verify raw events appear in packet log
+9. Verify MTU shows 247
+10. Verify raw events appear in packet log, and that each notification logs a
+    structured frame breakdown (head/cmd/key/len/payload/CRC)
+11. **Capture step (the real unblock):** run a btsnoop capture of the official
+    VeryFit app requesting battery/device-info, then compare the captured frames to
+    `WatchProtocol`'s output to lock the head byte, battery cmd/key, payload layout,
+    and CRC variant. Until then, battery/MAC display is **best-effort/unverified** —
+    do not treat a blank battery field as a code defect.
 
 ## Privacy & Security
 
@@ -222,4 +267,7 @@ Settings device card + developer raw-event viewer. See master plan Phase 2.
 
 - PKS note: `engineering/reviews/active-4-pro-veryfit-ble-protocol-investigation-initial-apk-findings.md`
 - APK: `/home/apolytus/workspace/veryfit-3-4-0.apk`
-- Bluetooth capture analysis: session `20260621_010233_b4f7a6`
+- Bluetooth capture analysis: session `20260621_010233_b4f7a6` — **note:** the raw
+  capture artifacts for this session are **not present in this repo/environment**, so
+  any "from capture"/"verified against capture" claim below cannot be re-verified
+  here and must be re-captured before it is relied upon for implementation.
