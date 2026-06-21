@@ -204,6 +204,12 @@ class WatchBleManager(private val context: Context) {
                     } else current
                 }
             },
+            onResponseHex = { hex ->
+                _state.update { current ->
+                    if (current is WatchConnectionState.Connected) current.copy(lastResponseHex = hex)
+                    else current
+                }
+            },
         )
 
         try {
@@ -239,6 +245,10 @@ class WatchBleManager(private val context: Context) {
         val characteristic = callback.writeCharacteristic ?: return false
 
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_TX, characteristic.uuid.toString(), command)
+        _state.update { current ->
+            if (current is WatchConnectionState.Connected) current.copy(lastCommandHex = command.toHex())
+            else current
+        }
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
