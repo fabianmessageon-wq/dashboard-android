@@ -128,6 +128,7 @@ class WatchGattCallback(
         value: ByteArray,
     ) {
         packetLogger.log("RX", "${characteristic.uuid}: ${value.toHex()}")
+        packetLogger.logRaw(WatchPacketLogger.DIRECTION_RX, characteristic.uuid.toString(), value)
         parseResponse(value)
     }
 
@@ -139,6 +140,7 @@ class WatchGattCallback(
             characteristic.value ?: byteArrayOf()
         }
         packetLogger.log("RX", "${characteristic.uuid}: ${value.toHex()}")
+        packetLogger.logRaw(WatchPacketLogger.DIRECTION_RX, characteristic.uuid.toString(), value)
         parseResponse(value)
     }
 

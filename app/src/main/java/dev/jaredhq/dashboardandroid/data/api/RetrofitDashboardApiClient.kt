@@ -5,11 +5,14 @@ import dev.jaredhq.dashboardandroid.data.api.dto.ChatRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.toDirectCaptureResult
 import dev.jaredhq.dashboardandroid.data.api.dto.toDomain
+import dev.jaredhq.dashboardandroid.data.api.dto.toDto
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
 
@@ -49,6 +52,9 @@ class RetrofitDashboardApiClient(
 
     override suspend fun chat(message: String): CaptureResult =
         call { service.chat(ChatRequest(message = message)).toDomain() }
+
+    override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
+        call { service.syncWatch(request.toDto()).toDomain() }
 
     /** Run a service call, normalizing every failure into [ApiException]. */
     private inline fun <T> call(block: () -> T): T = try {

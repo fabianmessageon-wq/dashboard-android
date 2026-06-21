@@ -41,6 +41,32 @@ class WatchBleManager(private val context: Context) {
     private var gattCallback: WatchGattCallback? = null
     private var isScanning = false
 
+    /** Epoch millis the current connection became [WatchConnectionState.Connected], or null. */
+    @Volatile
+    var connectedAtMillis: Long? = null
+        private set
+
+    /** Epoch millis of the most recent disconnect, or null if never disconnected. */
+    @Volatile
+    var disconnectedAtMillis: Long? = null
+        private set
+
+    // Last known device identity, retained across a disconnect so a disconnect sync
+    // can still name the device for the dashboard's connection history.
+    @Volatile
+    private var lastDeviceAddress: String? = null
+    @Volatile
+    private var lastDeviceName: String? = null
+    @Volatile
+    private var lastMacAddress: String? = null
+
+    /**
+     * Invoked whenever the connection reaches a terminal/meaningful state
+     * (connected or disconnected) so the app can enqueue a one-off telemetry sync.
+     * Set by [dev.jaredhq.dashboardandroid.di.ServiceLocator]; left null in tests.
+     */
+    var onConnectionEvent: (() -> Unit)? = null
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             result?.device?.let { device ->
@@ -147,12 +173,15 @@ class WatchBleManager(private val context: Context) {
      */
     fun connect(device: BluetoothDevice) {
         stopScan()
+        // A fresh connection attempt: clear the previous session's connect time so
+        // the eventual Connected state stamps a new window.
+        connectedAtMillis = null
         _state.update { WatchConnectionState.Connecting(device.address) }
         packetLogger.log("BLE", "Connecting to ${device.address}")
 
         gattCallback = WatchGattCallback(
             packetLogger = packetLogger,
-            onStateChange = { newState -> _state.update { newState } },
+            onStateChange = { newState -> applyState(newState) },
             onMtuChanged = { mtu ->
                 _state.update { current ->
                     if (current is WatchConnectionState.Connected) {
@@ -168,6 +197,7 @@ class WatchBleManager(private val context: Context) {
                 }
             },
             onMacResponse = { mac ->
+                lastMacAddress = mac
                 _state.update { current ->
                     if (current is WatchConnectionState.Connected) {
                         current.copy(macAddress = mac)
@@ -207,6 +237,8 @@ class WatchBleManager(private val context: Context) {
         val gatt = bluetoothGatt ?: return false
         val callback = gattCallback ?: return false
         val characteristic = callback.writeCharacteristic ?: return false
+
+        packetLogger.logRaw(WatchPacketLogger.DIRECTION_TX, characteristic.uuid.toString(), command)
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
@@ -252,6 +284,51 @@ class WatchBleManager(private val context: Context) {
         packetLogger.log("TX", "02:07 Status: ${cmd.toHex()}")
         writeCommand(cmd)
     }
+
+    /**
+     * Centralized lifecycle-state apply: records connect/disconnect timestamps and
+     * notifies [onConnectionEvent] so the app can sync telemetry. Only the GATT
+     * lifecycle transitions flow through here; battery/MTU/MAC refinements update
+     * the [Connected][WatchConnectionState.Connected] state directly and must not
+     * re-trigger a sync.
+     */
+    private fun applyState(newState: WatchConnectionState) {
+        when (newState) {
+            is WatchConnectionState.Connected -> {
+                if (connectedAtMillis == null) connectedAtMillis = System.currentTimeMillis()
+                lastDeviceAddress = newState.deviceAddress
+                newState.deviceName?.let { lastDeviceName = it }
+            }
+            is WatchConnectionState.Disconnected,
+            is WatchConnectionState.Error ->
+                // Keep connectedAtMillis so a disconnect sync can report the full
+                // session window; connect() resets it for the next attempt.
+                disconnectedAtMillis = System.currentTimeMillis()
+            else -> Unit // Scanning / Connecting: no timestamp change
+        }
+        _state.update { newState }
+        when (newState) {
+            is WatchConnectionState.Connected,
+            is WatchConnectionState.Disconnected,
+            is WatchConnectionState.Error -> onConnectionEvent?.invoke()
+            else -> Unit
+        }
+    }
+
+    /**
+     * Build the current telemetry snapshot for a dashboard sync, or null when
+     * there is no identifiable device yet (e.g. idle before the first connect).
+     * Pure mapping lives in [WatchSyncMapper] so it stays unit-testable.
+     */
+    fun buildSyncRequest() = WatchSyncMapper.build(
+        state = _state.value,
+        connectedAtMillis = connectedAtMillis,
+        disconnectedAtMillis = disconnectedAtMillis,
+        lastDeviceAddress = lastDeviceAddress,
+        lastDeviceName = lastDeviceName,
+        lastMacAddress = lastMacAddress,
+        rawEvents = packetLogger.getRawEvents(),
+    )
 
     internal fun closeGatt() {
         try {

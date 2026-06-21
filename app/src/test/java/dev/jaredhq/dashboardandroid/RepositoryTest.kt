@@ -11,6 +11,8 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,6 +98,33 @@ class RepositoryTest {
         assertEquals(capture.today, repository.cachedToday())
     }
 
+    // ── syncWatch (Phase 2 telemetry) ───────────────────────────────────────
+
+    @Test
+    fun syncWatchSucceedsAndEchoesDeviceId() = runTest {
+        val (repository, _) = repo()
+        val result = repository.syncWatch(
+            WatchSyncRequest(deviceId = "f4:91:29:51:c6:45", connectionState = "connected"),
+        )
+        assertTrue(result.isSuccess)
+        val ack = result.getOrThrow()
+        assertTrue(ack.accepted)
+        assertEquals("f4:91:29:51:c6:45", ack.deviceId)
+    }
+
+    @Test
+    fun syncWatchSurfacesNetworkFailureAsResult() = runTest {
+        val repository = DashboardRepository(
+            cache = InMemoryTodayCache(),
+            apiProvider = { FailingClient(status = 503, message = "down") },
+        )
+        val result = repository.syncWatch(
+            WatchSyncRequest(deviceId = "AA:BB", connectionState = "connected"),
+        )
+        assertTrue(result.isFailure)
+        assertEquals(503, (result.exceptionOrNull() as ApiException).status)
+    }
+
     // ── testConnection (read-only probe) ────────────────────────────────────
 
     @Test
@@ -157,6 +186,7 @@ class RepositoryTest {
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
+        override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult = fail()
     }
 
     /** getToday works, but the quote endpoint is unavailable. */
@@ -170,6 +200,8 @@ class RepositoryTest {
         override suspend fun capture(title: String): CaptureResult =
             throw ApiException(0, "n/a")
         override suspend fun chat(message: String): CaptureResult =
+            throw ApiException(0, "n/a")
+        override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
             throw ApiException(0, "n/a")
     }
 }

@@ -7,6 +7,8 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
+import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -97,6 +99,12 @@ class FakeDashboardApiClient(
             createdTaskId = nextTaskId++,
             mode = CaptureMode.ASSISTANT,
         )
+    }
+
+    override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult {
+        tick()
+        // The offline fake simply acknowledges — no telemetry is persisted.
+        return WatchSyncResult(accepted = true, deviceId = request.deviceId)
     }
 
     private suspend fun tick() {

@@ -16,7 +16,23 @@ class WatchPacketLogger(private val maxEntries: Int = 200) {
         val message: String,
     )
 
+    /**
+     * A structured record of a single raw BLE packet, captured alongside the
+     * human-readable [LogEntry] feed so Phase 2 can upload it to the dashboard.
+     *
+     * @property direction [DIRECTION_TX] (phone→watch) or [DIRECTION_RX] (watch→phone).
+     * @property characteristicUuid Full characteristic UUID the packet went to/from.
+     * @property hex Contiguous lowercase payload hex (e.g. `0204`).
+     */
+    data class RawEvent(
+        val timestamp: Long,
+        val direction: String,
+        val characteristicUuid: String,
+        val hex: String,
+    )
+
     private val buffer = CopyOnWriteArrayList<LogEntry>()
+    private val rawEvents = CopyOnWriteArrayList<RawEvent>()
 
     fun log(tag: String, message: String) {
         buffer.add(LogEntry(System.currentTimeMillis(), tag, message))
@@ -25,10 +41,40 @@ class WatchPacketLogger(private val maxEntries: Int = 200) {
         }
     }
 
+    /**
+     * Record a structured raw packet for dashboard sync. [bytes] is captured as
+     * contiguous lowercase hex. Kept separate from [log] (which stays a free-form
+     * developer feed) so the uploaded events have a clean, parseable shape.
+     */
+    fun logRaw(direction: String, characteristicUuid: String, bytes: ByteArray) {
+        rawEvents.add(
+            RawEvent(
+                timestamp = System.currentTimeMillis(),
+                direction = direction,
+                characteristicUuid = characteristicUuid,
+                hex = bytes.joinToString("") { "%02x".format(it) },
+            ),
+        )
+        if (rawEvents.size > maxEntries) {
+            rawEvents.removeAt(0)
+        }
+    }
+
     fun getEntries(): List<LogEntry> = buffer.toList()
+
+    fun getRawEvents(): List<RawEvent> = rawEvents.toList()
 
     fun clear() {
         buffer.clear()
+        rawEvents.clear()
+    }
+
+    companion object {
+        /** Phone → watch (a command write). */
+        const val DIRECTION_TX = "phone->watch"
+
+        /** Watch → phone (a notification or read). */
+        const val DIRECTION_RX = "watch->phone"
     }
 
     fun format(): String {

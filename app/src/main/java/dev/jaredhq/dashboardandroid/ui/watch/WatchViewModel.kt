@@ -18,6 +18,8 @@ data class WatchUiState(
     val rawLog: String = "",
     val hasPermissions: Boolean = false,
     val permissionRationale: String? = null,
+    /** Transient confirmation shown after the user queues a dashboard sync. */
+    val syncMessage: String? = null,
 )
 
 /**
@@ -82,6 +84,15 @@ class WatchViewModel(
     fun requestStatus() {
         bleManager.requestStatus()
         _state.update { it.copy(rawLog = bleManager.logger.format()) }
+    }
+
+    /**
+     * Note that a one-off telemetry sync has been queued. The actual enqueue runs
+     * via WatchSyncScheduler (it needs a Context, so the screen triggers it); this
+     * just surfaces a brief confirmation in the UI.
+     */
+    fun onSyncRequested() {
+        _state.update { it.copy(syncMessage = "Telemetry sync queued") }
     }
 
     fun clearLog() {

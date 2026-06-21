@@ -178,12 +178,45 @@ Upload endpoint: `POST /api/widget/v1/watch/sync` (dashboard side to be implemen
 - No health metrics decoded or uploaded in Phase 1
 - BLE connection data is user-local until explicitly uploaded
 
-## Next Phases (not in scope)
+## Next Phases
 
-- Phase 2: Health metric schema (steps, heart rate, sleep, etc.) and dashboard API endpoints
-- Phase 3: Packet reassembly for `0x33` and `0xD1` families
-- Phase 4: Background sync with foreground service
-- Phase 5: Clean-room sync command reverse-engineering or native library decision
+Phase numbering follows the authoritative roadmap in `docs/plans/ble-master-plan.md`
+(an earlier draft of this list conflated Phases 2 and 3 — corrected below).
+
+### Phase 2: Safe Dashboard Metrics — ✅ Android side complete
+
+**Objective:** Upload connection/device telemetry (device, battery, MTU, connection
+state, developer-only raw handshake events) to the dashboard. **No health metrics**
+— those are Phase 3.
+
+This is the natural completion of Step 7 (Dashboard Upload) above: the `WatchSyncDto`
+placeholder is now a real upload path.
+
+**Implemented in this repo:**
+- `WatchSyncRequest`/`WatchSyncEvent`/`WatchSyncResult` domain models +
+  `WatchSyncDto`/`WatchRawEventDto`/`WatchSyncResponseDto` wire DTOs (request body
+  matches the master plan).
+- `WatchSyncMapper` builds the payload from the live `WatchConnectionState`
+  (MAC-preferred device id, lowercase connection-state, ISO-8601 timestamps).
+- `WatchPacketLogger` captures structured `RawEvent`s (TX in
+  `WatchBleManager.writeCommand`, RX in `WatchGattCallback`).
+- `DashboardApiClient.syncWatch` → `POST /api/widget/v1/watch/sync`, wired through
+  the Retrofit + Fake clients and `DashboardRepository`.
+- `WatchSyncWorker` + `WatchSyncScheduler`: one-off upload on every connection event
+  (via `WatchBleManager.onConnectionEvent`) and a 6-hour periodic refresh; manual
+  "Sync to Dashboard" button on the Watch screen.
+- Unit tests: `WatchSyncMappingTest`, plus `syncWatch` cases in `RepositoryTest`.
+
+**Dashboard side (separate repo, not in this codebase):** the `/api/widget/v1/watch/sync`
+endpoint, the `watch_devices`/`watch_connections`/`watch_raw_events` schema, and the
+Settings device card + developer raw-event viewer. See master plan Phase 2.
+
+### Later phases (not in scope)
+
+- Phase 3: Health metric schema (steps, heart rate, sleep, etc.) + `/watch/health` API
+- Phase 4: Packet reassembly + decoding for the `0x33` and `0xD1` families
+- Phase 5: Clean-room sync command reverse-engineering / native library decision
+- Phase 6+: Health UI, background sync (foreground service), advanced features
 
 ## References
 
