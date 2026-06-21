@@ -25,6 +25,7 @@ class WatchGattCallback(
     private val onBatteryInfo: (WatchBatteryInfo) -> Unit,
     private val onMacResponse: (String) -> Unit,
     private val onResponseHex: (String) -> Unit = {},
+    private val onCommandWriteComplete: (() -> Unit)? = null,
     private val onNotificationsEnabled: (() -> Unit)? = null,
 ) : BluetoothGattCallback() {
 
@@ -34,13 +35,20 @@ class WatchGattCallback(
         private set
     var secondaryNotifyCharacteristic: BluetoothGattCharacteristic? = null
         private set
+    var extraEncryptCharacteristic: BluetoothGattCharacteristic? = null
+        private set
 
     private var hasEnabledNotifications = false
     // MTU negotiated before service discovery; carried into the initial Connected state.
     private var negotiatedMtu = 23
 
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-        packetLogger.log("GATT", "onConnectionStateChange status=$status newState=$newState")
+        val bondState = try {
+            gatt.device?.bondState
+        } catch (_: SecurityException) {
+            null
+        }
+        packetLogger.log("GATT", "onConnectionStateChange status=$status newState=$newState bond=$bondState")
         when (newState) {
             BluetoothProfile.STATE_CONNECTED -> {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -87,6 +95,12 @@ class WatchGattCallback(
         val service = gatt.getService(WatchBleManager.VERYFIT_SERVICE_UUID)
         if (service == null) {
             packetLogger.log("GATT", "VeryFit service ${WatchBleManager.VERYFIT_SERVICE_UUID} not found")
+            gatt.services.forEach { discovered ->
+                packetLogger.log("GATT", "Discovered service ${discovered.uuid}")
+                discovered.characteristics.forEach { ch ->
+                    packetLogger.log("GATT", "  char ${ch.uuid} props=0x${ch.properties.toString(16)}")
+                }
+            }
             onStateChange(WatchConnectionState.Error("VeryFit service not found"))
             return
         }
@@ -94,10 +108,15 @@ class WatchGattCallback(
         writeCharacteristic = service.getCharacteristic(WatchBleManager.WRITE_CHARACTERISTIC_UUID)
         notifyCharacteristic = service.getCharacteristic(WatchBleManager.NOTIFY_CHARACTERISTIC_UUID)
         secondaryNotifyCharacteristic = service.getCharacteristic(WatchBleManager.SECONDARY_NOTIFY_UUID)
+        extraEncryptCharacteristic = service.getCharacteristic(WatchBleManager.EXTRA_ENCRYPT_UUID)
 
         packetLogger.log("GATT", "Write char: ${writeCharacteristic?.uuid}")
         packetLogger.log("GATT", "Notify char: ${notifyCharacteristic?.uuid}")
         packetLogger.log("GATT", "Secondary notify char: ${secondaryNotifyCharacteristic?.uuid}")
+        packetLogger.log("GATT", "Extra/encrypt char: ${extraEncryptCharacteristic?.uuid}")
+        service.characteristics.forEach { ch ->
+            packetLogger.log("GATT", "Service char ${ch.uuid} props=0x${ch.properties.toString(16)}")
+        }
 
         // Transition to Connected immediately so the UI is responsive; battery and
         // MAC come in as subsequent state updates once the GATT op chain below finishes.
@@ -110,12 +129,50 @@ class WatchGattCallback(
             )
         )
 
+        // VeryFit firmware can expose 0x0AF8 as an encrypt/background-control
+        // characteristic. The official app reads it before enabling notify when
+        // present; after firmware updates this can become the difference between a
+        // quiet connection and a usable one. Treat read failure as diagnostic, then
+        // still fall through to notification setup.
+        extraEncryptCharacteristic?.takeIf {
+            it.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0
+        }?.let { ch ->
+            try {
+                packetLogger.log("GATT", "Reading 0x0AF8 encrypt/background characteristic before notifications")
+                if (gatt.readCharacteristic(ch)) return
+                packetLogger.log("GATT", "readCharacteristic 0x0AF8 returned false; continuing to notifications")
+            } catch (e: SecurityException) {
+                packetLogger.log("GATT", "SecurityException reading 0x0AF8: ${e.message}")
+            }
+        }
+
+        startNotificationEnablement(gatt)
+    }
+
+    private fun startNotificationEnablement(gatt: BluetoothGatt) {
         // Serialize GATT ops: AF7 CCCD → AF2 CCCD.
         // Android GATT has no internal queue; overlapping writes silently fail.
         // onDescriptorWrite chains each step only after the previous one completes.
         notifyCharacteristic?.let { enableNotification(gatt, it) }
             ?: secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
             ?: onNotificationsEnabled?.invoke()
+    }
+
+    override fun onCharacteristicRead(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray,
+        status: Int,
+    ) {
+        packetLogger.log("GATT", "onCharacteristicRead ${characteristic.uuid} status=$status value=${value.toHex()}")
+        if (characteristic.uuid == WatchBleManager.EXTRA_ENCRYPT_UUID) startNotificationEnablement(gatt)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+        val value = characteristic.value ?: byteArrayOf()
+        packetLogger.log("GATT", "onCharacteristicRead ${characteristic.uuid} status=$status value=${value.toHex()}")
+        if (characteristic.uuid == WatchBleManager.EXTRA_ENCRYPT_UUID) startNotificationEnablement(gatt)
     }
 
     override fun onCharacteristicChanged(
@@ -144,6 +201,7 @@ class WatchGattCallback(
 
     override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
         packetLogger.log("GATT", "onCharacteristicWrite ${characteristic.uuid} status=$status")
+        onCommandWriteComplete?.invoke()
     }
 
     override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
