@@ -37,6 +37,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.jaredhq.dashboardandroid.ble.WatchBatteryInfo
 import dev.jaredhq.dashboardandroid.ble.WatchConnectionState
 import dev.jaredhq.dashboardandroid.ui.AppViewModelFactory
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
@@ -55,7 +56,7 @@ fun WatchScreen(
     onDisconnectClick: () -> Unit,
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
-    onStatusRequest: () -> Unit,
+    onBatteryInfoRequest: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -67,7 +68,7 @@ fun WatchScreen(
         onDisconnectClick = onDisconnectClick,
         onMacRequest = onMacRequest,
         onDeviceInfoRequest = onDeviceInfoRequest,
-        onStatusRequest = onStatusRequest,
+        onBatteryInfoRequest = onBatteryInfoRequest,
         onSyncClick = onSyncClick,
         onClearLog = onClearLog,
         onPermissionsGranted = onPermissionsGranted,
@@ -82,7 +83,7 @@ private fun WatchContent(
     onDisconnectClick: () -> Unit,
     onMacRequest: () -> Unit,
     onDeviceInfoRequest: () -> Unit,
-    onStatusRequest: () -> Unit,
+    onBatteryInfoRequest: () -> Unit,
     onSyncClick: () -> Unit,
     onClearLog: () -> Unit,
     onPermissionsGranted: () -> Unit,
@@ -203,13 +204,13 @@ private fun WatchContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(onClick = onMacRequest, modifier = Modifier.weight(1f)) {
-                    Text("MAC (02:04)")
+                    Text("MAC (301)")
                 }
                 OutlinedButton(onClick = onDeviceInfoRequest, modifier = Modifier.weight(1f)) {
-                    Text("Info (02:02)")
+                    Text("Info (300)")
                 }
-                OutlinedButton(onClick = onStatusRequest, modifier = Modifier.weight(1f)) {
-                    Text("Status (02:07)")
+                OutlinedButton(onClick = onBatteryInfoRequest, modifier = Modifier.weight(1f)) {
+                    Text("Battery (321)")
                 }
             }
 
@@ -311,9 +312,11 @@ private fun DeviceInfoCard(state: WatchConnectionState.Connected) {
             Text("Device Info", style = MaterialTheme.typography.labelMedium)
             InfoRow("Address", state.deviceAddress)
             InfoRow("Name", state.deviceName ?: "—")
-            InfoRow("Battery", state.batteryPercent?.let { "$it%" } ?: "—")
+            InfoRow("Battery", state.batteryInfo?.let { "${it.level}% (${WatchBatteryInfo.statusString(it.status)})" } ?: "—")
+            InfoRow("Voltage", state.batteryInfo?.let { if (it.voltage > 0) "${it.voltage} mV" else "—" } ?: "—")
+            InfoRow("Last charge", state.batteryInfo?.lastChargingTime ?: "—")
             InfoRow("MTU", "${state.mtu}")
-            InfoRow("MAC (02:04)", state.macAddress ?: "—")
+            InfoRow("MAC (301)", state.macAddress ?: "—")
             InfoRow("Last CMD", state.lastCommandHex ?: "—")
             InfoRow("Last RX", state.lastResponseHex ?: "—")
         }
@@ -359,7 +362,7 @@ private fun PreviewDisconnected() {
             onDisconnectClick = {},
             onMacRequest = {},
             onDeviceInfoRequest = {},
-            onStatusRequest = {},
+            onBatteryInfoRequest = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},
@@ -377,18 +380,18 @@ private fun PreviewConnected() {
                 state = WatchConnectionState.Connected(
                     deviceAddress = "AA:BB:CC:DD:EE:FF",
                     deviceName = "Kogan Active 4 Pro",
-                    batteryPercent = 78,
+                    batteryInfo = WatchBatteryInfo(level = 78, status = 0, voltage = 4200, mode = 0),
                     mtu = 247,
                     macAddress = "AA:BB:CC:DD:EE:FF",
                 ),
                 hasPermissions = true,
-                rawLog = "[12:34:56.789] TX: 02 04 00 06\n[12:34:56.812] RX: 02 04 0C AA BB CC DD EE FF AA BB CC DD EE FF 3A",
+                rawLog = "[12:34:56.789] TX: 7B 7D\n[12:34:56.812] RX: 7B 22 6C 65 76 65 6C 22 3A 37 38 7D",
             ),
             onScanClick = {},
             onDisconnectClick = {},
             onMacRequest = {},
             onDeviceInfoRequest = {},
-            onStatusRequest = {},
+            onBatteryInfoRequest = {},
             onSyncClick = {},
             onClearLog = {},
             onPermissionsGranted = {},

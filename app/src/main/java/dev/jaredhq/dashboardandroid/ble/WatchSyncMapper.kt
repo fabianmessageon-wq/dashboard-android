@@ -26,7 +26,7 @@ object WatchSyncMapper {
     ): WatchSyncRequest? {
         val connected = state as? WatchConnectionState.Connected
 
-        // The MAC from the 02:04 handshake is the stable identity; fall back to the
+        // The MAC from command 301 (CMD_GET_MAC_ADDRESS) is the stable identity; fall back to the
         // BLE address (current or last-known) when the MAC hasn't been read yet.
         val mac = connected?.macAddress ?: lastMacAddress
         val address = connected?.deviceAddress

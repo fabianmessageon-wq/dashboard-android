@@ -4,12 +4,36 @@
 
 Build an independent Android-dashboard bridge for the Kogan Active 4 Pro smartwatch, avoiding VeryFit/vendor/cloud/third-party health platforms. The watch data flows: Active 4 Pro → dashboard-android app → self-hosted dashboard API.
 
+> ## ⚠ Evidence correction (2026-06-21)
+>
+> This plan predates confirmation of the native protocol boundary. The APK proves a
+> specific architecture that changes how several phases must be implemented. Honest
+> status of the key assumptions, used throughout the phases below:
+>
+> | Claim in this plan | Status | Evidence |
+> |---|---|---|
+> | BLE UUIDs (`0x0AF0`/`0AF6`/`0AF7`/`0AF2`) | **Confirmed** | `com.ido.ble.bluetooth.utils.frost`; native `protocoDataF2` |
+> | Native sync entry points (`StartSyncHealthData`, `WriteJsonData`, …) | **Confirmed (Java↔native API)** | JNI exports in `libVeryFitMulti.so` |
+> | Health **type IDs** (1–20, 7001–7019) | **Confirmed as native/JSON-boundary IDs** | native strings + `SyncV3Handler` |
+> | Wire is **binary IDO frames**, JSON only at the native boundary | **Confirmed** | `WriteJsonData(json)`→native frames bytes; `ReceiveDatafromBle(byte[])` takes raw binary; `CallBackJsonData` returns JSON |
+> | `02:04`/`02:02`/`02:07` raw 2-byte commands | **Disproven as the real transport** | app never hand-writes opcodes; native generates the frame. The `02:04` was capture-derived and is now a research target, not a deliverable |
+> | Battery via standard `0x180F`/`0x2A19` | **Not reliable on this watch** | notes say "if readable"; impl removed the read and uses the IDO battery request |
+> | `0x33 / DA AD DA AD` frame + CRC-16/CCITT-FALSE | **Plausible but unverified here** | CRC matches native `crc16_compute`; frame shape is consistent with native `head fixed`/`cmd`/`key`/`nseq`/`len` strings, but the cited capture session is **not in this repo** and per-field/per-command meaning is uncaptured |
+> | Exact per-request **cmd/key**, head byte, payload structs | **Unknown — requires focused BLE capture** | live inside the stripped native lib; not in any string |
+> | Which metrics this watch actually supports | **Must be capability-gated** | native `support_*` / function-table feature flags; APK schema ≠ device support |
+>
+> Rule of thumb for everything below: **"APK-confirmed at the native boundary" ≠
+> "verified on the BLE wire."** Treat any raw command bytes, frame field, or metric
+> availability as **capture-gated / capability-gated** until a focused capture or the
+> device function table proves it. The implemented `ble/` source already follows this
+> (binary IDO frame builder + parser, all unverified parts labelled).
+
 ## Context
 
 - **Watch:** Kogan Active 4 Pro (rebranded IDO/VeryFit device)
 - **Official app:** VeryFit (`com.watch.life` v3.4.0), uses IDO BLE SDK with native protocol library (`libVeryFitMulti.so`)
 - **Dashboard Android app:** Native Kotlin + Jetpack Compose, minSdk 26, compileSdk 34
-- **Protocol:** BLE GATT, service `0x0AF0`, custom binary protocol with command families `0x02`, `0x03`, `0x33`, `0xD1`
+- **Protocol:** BLE GATT, service `0x0AF0`, custom binary protocol. Command "families" `0x02`, `0x03`, `0x33`, `0xD1` are **capture-observed/hypothesised**, not wire-verified here — and the native lib (not Java) generates the actual frames (see Evidence correction). The `0x02` two-byte form in particular is superseded.
 - **APK location:** `/home/apolytus/workspace/veryfit-3-4-0.apk`
 - **PKS investigation note:** `engineering/reviews/active-4-pro-veryfit-ble-protocol-investigation-initial-apk-findings.md`
 
@@ -24,17 +48,24 @@ Build an independent Android-dashboard bridge for the Kogan Active 4 Pro smartwa
 | Secondary notify | `00000aF2-0000-1000-8000-00805f9b34fb` |
 | Extra/encryption | `00000aF8-0000-1000-8000-00805f9b34fb` |
 | CCCD | `00002902-0000-1000-8000-00805f9b34fb` |
-| Battery service | `0000180F-0000-1000-8000-00805f9b34fb` |
-| Battery characteristic | `00002A19-0000-1000-8000-00805f9b34fb` |
+| Battery service *(generic; not relied on — see correction)* | `0000180F-0000-1000-8000-00805f9b34fb` |
+| Battery characteristic *(generic; not relied on)* | `00002A19-0000-1000-8000-00805f9b34fb` |
 
 ## VeryFit Architecture (from APK reverse engineering)
 
 ```
 Java/Kotlin glue layer
   → com.veryfit.multi.nativeprotocol.Protocol (JNI)
-    → libVeryFitMulti.so / libprotocol.so
-      → BLE GATT writes/reads
+    → libVeryFitMulti.so / libprotocol.so   ← builds/parses the BINARY IDO frames
+      → BLE GATT writes/reads (binary on the wire)
 ```
+
+The crossing point matters for a clean-room reimplementation:
+`Protocol.WriteJsonData(json, type)` takes JSON **into** native and the lib emits the
+binary frame written to `0x0AF6`; `Protocol.ReceiveDatafromBle(byte[])` takes the
+**raw binary** notification and the lib returns JSON via `CallBackJsonData(bytes,
+type, status)`. So **JSON is an internal API detail, never the BLE payload** — an
+independent bridge must replicate the binary framing, not send JSON.
 
 Native sync entry points:
 - `StartSyncHealthData()` / `StopSyncHealthData()`
@@ -76,9 +107,12 @@ V3 health data type IDs (native):
 - Discover service `0x0AF0`
 - Request MTU 517, expect negotiated 247
 - Enable notifications on `0x0AF7` and `0x0AF2`
-- Write `02:04` command to `0x0AF6`, confirm MAC response
-- Read battery via standard GATT `0x180F`
-- Log raw protocol events (developer-only in-memory ring buffer)
+- ~~Write `02:04` command to `0x0AF6`, confirm MAC response~~ → Write a **binary IDO
+  V3 frame** to `0x0AF6`; cmd/key UNVERIFIED, capture-gated (see Evidence correction)
+- ~~Read battery via standard GATT `0x180F`~~ → Request battery over the **IDO
+  protocol**; `0x180F` is not relied on
+- Log raw protocol events (developer-only in-memory ring buffer), including a
+  structured frame breakdown per notification to drive the confirming capture
 - Display connection status and telemetry in new "Watch" tab
 
 **Files:** See `docs/plans/ble-phase-1-probe.md` for detailed architecture.
@@ -87,7 +121,9 @@ V3 health data type IDs (native):
 1. `./gradlew testDebugUnitTest`
 2. `./gradlew assembleDebug`
 3. Install on Samsung S21, pair with Active 4 Pro
-4. Confirm scan → connect → battery read → 02:04 MAC response
+4. Confirm scan → connect → notifications enabled → raw frame breakdown logged.
+   Battery/MAC display is **best-effort until a capture confirms the framing** — a
+   blank battery field is expected, not a defect, until then.
 
 ## Phase 2: Safe Dashboard Metrics
 
@@ -208,7 +244,14 @@ CREATE TABLE watch_raw_events (
 
 **Objective:** Add schema support for APK-confirmed health metrics, marked unverified until decoded from watch.
 
-**APK-confirmed metric candidates:**
+> **Capability-gate before assuming support.** The table below is the APK's *model
+> catalogue* (what the SDK can represent across all IDO devices), **not** what the
+> Active 4 Pro returns. The native lib exposes `support_*` feature flags and a device
+> **function table** (e.g. `support_sync_body_composition`, `support_sync_ecg`,
+> `V3_support_scientific_sleep`, `support_emotion_health`). Discover the function
+> table on connect and gate each metric on it; do not build UI/sync for a metric until
+> the device reports it. "Confidence" below is APK-schema confidence, not device
+> confidence.
 
 | Metric | APK Model Class | Confidence |
 |--------|-----------------|------------|
@@ -270,7 +313,18 @@ CREATE TABLE watch_health_metrics (
 
 **Objective:** Decode the `0x33` and `0xD1` packet families, implement reassembly.
 
-**0x33 packet structure (from capture analysis):**
+> **Status of this structure: capture-derived, not re-verifiable in this repo.** The
+> byte layout below came from the Bluetooth capture session `20260621_010233_b4f7a6`,
+> whose raw artifacts are **not present here**. It is *consistent with* the native
+> strings (`head fixed`, `cmd`, `key`, `nseq`, `version`, `length`, CRC16) and the CRC
+> matches native `crc16_compute`, so it is a credible hypothesis — but the field
+> meanings (which bytes are cmd vs key vs seq, endianness, and which commands carry
+> battery/device-info) are **unconfirmed**. Re-capture and diff against
+> `WatchProtocol.parseFrame` output before implementing decode logic. Note also: this
+> `0x33` head differs from the placeholder head byte in `WatchProtocol.kt` (`0xAB`) —
+> reconciling the two is exactly what the capture must settle.
+
+**0x33 packet structure (from capture analysis — UNVERIFIED here):**
 
 ```
 33 DA AD DA AD 01 LL LL CC CC SS SS [payload...] CRC CRC
@@ -287,7 +341,9 @@ CREATE TABLE watch_health_metrics (
 | `payload` | Command data |
 | `CRC CRC` | CRC-16/CCITT-FALSE, little-endian |
 
-**CRC-16/CCITT-FALSE (verified against capture):**
+**CRC-16/CCITT-FALSE** (algorithm matches native `crc16_compute`; that the `0x33`
+frame is guarded by *this* variant rather than the `0x8005`/ARC `crc16_x16x15x21`
+the lib also contains is **capture-gated**):
 
 ```python
 def crc16_ccitt_false(data: bytes) -> int:
@@ -402,17 +458,25 @@ App requests sync (manual or scheduled)
 
 **Objective:** Full feature parity with official app where desired.
 
-**Potential features:**
-- Watch notifications (forward phone notifications to watch)
-- Watch settings sync (time, units, goals, alarms)
-- Weather sync
-- Contact sync (with privacy controls)
-- Music control
+**Potential features** (each is a confirmed native IDO command module in
+`libVeryFitMulti.so` — see source paths below — but all funnel through the same
+`WriteJsonData`→binary-frame path, so each still needs its **frame captured** and is
+**capability-gated** by the function table):
+- Watch notifications — `protocol_v3_mod/message/protocol_v3_notice_message*.c`,
+  `ProtocolSetNoticeEvt` / `ProtocolSetCallEvt` / `ProtocolMissedCallEvt`
+- Watch settings sync (time, units, goals, alarms) — `alarm/protocol_v3_set_alarm.c`,
+  config sync via `StartSyncConfigInfo`
+- Weather sync — `weather/protocol_set_v3_weather.c`, `protocol_set_long_city_name.c`
+- Contact sync (with privacy controls) — `other/protocol_sync_contact.c`
+- Music control — `music/protocol_v3_operate_ble_music.c`, `protocol_v3_music_control.c`
 - Find my watch / find my phone
-- Firmware updates (OTA/DFU)
-- Custom watch faces
+- Firmware updates (OTA/DFU) — Java DFU services (`SERVICE_UUID_M6_DFU`,
+  `DEVICE_DFU_*`); routes off the main `0x0AF0` path
+- Custom watch faces — `getSifliDialSize` / `mkSifliDial`, watch-dial encode modules
 
-**Note:** Each feature requires additional reverse engineering. Prioritize based on user need.
+**Note:** "native module exists" ≠ "implementable from static analysis." Each feature
+still requires a focused capture to learn its frame, plus a function-table check before
+exposing it. Prioritize based on user need. Do **not** assume raw command IDs.
 
 ## Privacy & Security Throughout
 
@@ -430,9 +494,12 @@ App requests sync (manual or scheduled)
 - [ ] `./gradlew assembleDebug` builds
 - [ ] Scan finds Active 4 Pro
 - [ ] Connect succeeds
-- [ ] Battery reads correctly
-- [ ] 02:04 returns MAC
-- [ ] Raw packet log visible
+- [ ] Notifications enabled on `0x0AF7`/`0x0AF2`
+- [ ] Raw packet log visible, with per-notification frame breakdown
+- [ ] **Capture taken** of the VeryFit app (battery/device-info) and diffed against
+      `WatchProtocol.parseFrame` — *prerequisite for the two below*
+- [ ] Battery decodes from the IDO protocol *(capture-gated — not via `0x180F`)*
+- [ ] MAC/device-info decodes from the captured frame *(capture-gated — not `02:04`)*
 
 ### Phase 2
 - [x] Android: telemetry DTO/mapper + `syncWatch` API path (unit-tested)
@@ -489,4 +556,7 @@ App requests sync (manual or scheduled)
 - Phase 1 detailed plan: `docs/plans/ble-phase-1-probe.md`
 - Phone app improvements: `docs/plans/phone-app-improvements.md`
 - APK: `/home/apolytus/workspace/veryfit-3-4-0.apk`
-- Bluetooth capture analysis: session `20260621_010233_b4f7a6`
+- Bluetooth capture analysis: session `20260621_010233_b4f7a6` — **raw artifacts not
+  present in this repo/environment.** Any "from capture"/"verified against capture"
+  statement in this plan therefore cannot be re-verified here and must be re-captured
+  before implementation relies on it (notably the `0x33`/`0xD1` framing and `02:04`).

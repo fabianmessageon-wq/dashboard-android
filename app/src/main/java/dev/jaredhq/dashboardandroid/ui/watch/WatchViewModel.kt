@@ -81,8 +81,8 @@ class WatchViewModel(
         _state.update { it.copy(rawLog = bleManager.logger.format()) }
     }
 
-    fun requestStatus() {
-        bleManager.requestStatus()
+    fun requestBatteryInfo() {
+        bleManager.requestBatteryInfo()
         _state.update { it.copy(rawLog = bleManager.logger.format()) }
     }
 

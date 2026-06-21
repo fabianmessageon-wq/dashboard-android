@@ -24,6 +24,11 @@ import java.util.UUID
  *
  * Handles scan, connect, disconnect, and delegates GATT events to [WatchGattCallback].
  * All state is exposed as a [StateFlow] of [WatchConnectionState] for Compose consumption.
+ *
+ * Commands are binary IDO V3 frames built by [WatchProtocol] (the official app's
+ * native lib frames JSON into these binary packets before writing them to BLE — the
+ * wire never carries JSON). The exact battery cmd/key and CRC are still unverified;
+ * see [WatchProtocol] for the capture-driven path to confirming them.
  */
 class WatchBleManager(private val context: Context) {
 
@@ -189,10 +194,13 @@ class WatchBleManager(private val context: Context) {
                     } else current
                 }
             },
-            onBatteryRead = { battery ->
+            onBatteryInfo = { batteryInfo ->
                 _state.update { current ->
                     if (current is WatchConnectionState.Connected) {
-                        current.copy(batteryPercent = battery)
+                        current.copy(
+                            batteryInfo = batteryInfo,
+                            batteryPercent = batteryInfo.level,
+                        )
                     } else current
                 }
             },
@@ -209,6 +217,11 @@ class WatchBleManager(private val context: Context) {
                     if (current is WatchConnectionState.Connected) current.copy(lastResponseHex = hex)
                     else current
                 }
+            },
+            onNotificationsEnabled = {
+                // After notifications are enabled, request battery info
+                packetLogger.log("BLE", "Notifications enabled, requesting battery info")
+                requestBatteryInfo()
             },
         )
 
@@ -236,8 +249,8 @@ class WatchBleManager(private val context: Context) {
     }
 
     /**
-     * Write a raw command to the VeryFit write characteristic (0x0AF6).
-     * The command bytes should include the full VeryFit packet (header + payload + checksum).
+     * Write a binary IDO V3 command frame to the VeryFit write characteristic
+     * (0x0AF6). Frames are built by [WatchProtocol]; this method is transport-only.
      */
     fun writeCommand(command: ByteArray): Boolean {
         val gatt = bluetoothGatt ?: return false
@@ -269,29 +282,42 @@ class WatchBleManager(private val context: Context) {
     }
 
     /**
-     * Send the 02:04 command to request the watch MAC address.
+     * Send command 301 (0x012D) to request the watch MAC address.
      */
     fun requestMacAddress() {
         val cmd = WatchProtocol.buildMacAddressCommand()
-        packetLogger.log("TX", "02:04 MAC request: ${cmd.toHex()}")
+        packetLogger.log("TX", "CMD_GET_MAC_ADDRESS (301): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
     /**
-     * Send the 02:02 command (device info request).
+     * Send command 300 (0x012C) to request basic device info.
      */
     fun requestDeviceInfo() {
         val cmd = WatchProtocol.buildDeviceInfoCommand()
-        packetLogger.log("TX", "02:02 Device info: ${cmd.toHex()}")
+        packetLogger.log("TX", "CMD_GET_BASIC_INFO (300): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
     /**
-     * Send the 02:07 command (battery/status request).
+     * Request battery info via the IDO V3 battery command (native data-type 321).
+     * The watch does not expose the standard BLE battery service, so this is the
+     * intended path. NOTE: the binary cmd/key is still an unverified hypothesis (see
+     * [WatchProtocol]); the watch may also push battery unsolicited on connect, which
+     * the notification parser will catch regardless.
      */
-    fun requestStatus() {
-        val cmd = WatchProtocol.buildStatusCommand()
-        packetLogger.log("TX", "02:07 Status: ${cmd.toHex()}")
+    fun requestBatteryInfo() {
+        val cmd = WatchProtocol.buildBatteryInfoCommand()
+        packetLogger.log("TX", "BATTERY_INFO req (type 321, frame UNVERIFIED): ${cmd.toHex()}")
+        writeCommand(cmd)
+    }
+
+    /**
+     * Send command 348 (0x015C) to request firmware status info.
+     */
+    fun requestFirmwareStatus() {
+        val cmd = WatchProtocol.buildFirmwareStatusCommand()
+        packetLogger.log("TX", "CMD_GET_FIRMWARE_STATUS (348): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
@@ -364,12 +390,6 @@ class WatchBleManager(private val context: Context) {
 
         /** CCCD descriptor: 0x2902 */
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-        /** Battery service: 0x180F */
-        val BATTERY_SERVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
-
-        /** Battery level characteristic: 0x2A19 */
-        val BATTERY_LEVEL_UUID: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
     }
 }
 

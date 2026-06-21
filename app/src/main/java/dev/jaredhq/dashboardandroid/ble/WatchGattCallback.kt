@@ -11,15 +11,21 @@ import android.os.Build
  * BluetoothGattCallback for the VeryFit/IDO BLE protocol.
  *
  * Handles connection lifecycle, service discovery, MTU negotiation,
- * notification enablement, battery reads, and raw packet logging.
+ * notification enablement, and response decoding.
+ *
+ * Inbound notifications are binary IDO V3 frames (see [WatchProtocol] for the
+ * verified transport architecture). Every notification is logged with a full
+ * structured breakdown so an on-device capture can confirm the exact framing;
+ * battery is then extracted from the frame payload, with an ASCII-JSON fallback.
  */
 class WatchGattCallback(
     private val packetLogger: WatchPacketLogger,
     private val onStateChange: (WatchConnectionState) -> Unit,
     private val onMtuChanged: (Int) -> Unit,
-    private val onBatteryRead: (Int) -> Unit,
+    private val onBatteryInfo: (WatchBatteryInfo) -> Unit,
     private val onMacResponse: (String) -> Unit,
     private val onResponseHex: (String) -> Unit = {},
+    private val onNotificationsEnabled: (() -> Unit)? = null,
 ) : BluetoothGattCallback() {
 
     var writeCharacteristic: BluetoothGattCharacteristic? = null
@@ -27,8 +33,6 @@ class WatchGattCallback(
     var notifyCharacteristic: BluetoothGattCharacteristic? = null
         private set
     var secondaryNotifyCharacteristic: BluetoothGattCharacteristic? = null
-        private set
-    var batteryCharacteristic: BluetoothGattCharacteristic? = null
         private set
 
     private var hasEnabledNotifications = false
@@ -95,10 +99,6 @@ class WatchGattCallback(
         packetLogger.log("GATT", "Notify char: ${notifyCharacteristic?.uuid}")
         packetLogger.log("GATT", "Secondary notify char: ${secondaryNotifyCharacteristic?.uuid}")
 
-        // Cache battery characteristic for the sequential read chain below
-        val batteryService = gatt.getService(WatchBleManager.BATTERY_SERVICE_UUID)
-        batteryCharacteristic = batteryService?.getCharacteristic(WatchBleManager.BATTERY_LEVEL_UUID)
-
         // Transition to Connected immediately so the UI is responsive; battery and
         // MAC come in as subsequent state updates once the GATT op chain below finishes.
         val device = gatt.device
@@ -110,12 +110,12 @@ class WatchGattCallback(
             )
         )
 
-        // Serialize GATT ops: AF7 CCCD → AF2 CCCD → battery read.
+        // Serialize GATT ops: AF7 CCCD → AF2 CCCD.
         // Android GATT has no internal queue; overlapping writes silently fail.
         // onDescriptorWrite chains each step only after the previous one completes.
         notifyCharacteristic?.let { enableNotification(gatt, it) }
             ?: secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-            ?: readBattery(gatt)
+            ?: onNotificationsEnabled?.invoke()
     }
 
     override fun onCharacteristicChanged(
@@ -142,29 +142,6 @@ class WatchGattCallback(
         parseResponse(value)
     }
 
-    override fun onCharacteristicRead(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        value: ByteArray,
-        status: Int,
-    ) {
-        packetLogger.log("RX-READ", "${characteristic.uuid}: ${value.toHex()} status=$status")
-        if (status == BluetoothGatt.GATT_SUCCESS && characteristic.uuid == WatchBleManager.BATTERY_LEVEL_UUID) {
-            val battery = value.firstOrNull()?.toInt()?.and(0xFF) ?: -1
-            if (battery >= 0) onBatteryRead(battery)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-        val value = characteristic.value ?: byteArrayOf()
-        packetLogger.log("RX-READ", "${characteristic.uuid}: ${value.toHex()} status=$status")
-        if (status == BluetoothGatt.GATT_SUCCESS && characteristic.uuid == WatchBleManager.BATTERY_LEVEL_UUID) {
-            val battery = value.firstOrNull()?.toInt()?.and(0xFF) ?: -1
-            if (battery >= 0) onBatteryRead(battery)
-        }
-    }
-
     override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
         packetLogger.log("GATT", "onCharacteristicWrite ${characteristic.uuid} status=$status")
     }
@@ -177,18 +154,9 @@ class WatchGattCallback(
             when (descriptor.characteristic.uuid) {
                 WatchBleManager.NOTIFY_CHARACTERISTIC_UUID ->
                     secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
-                        ?: readBattery(gatt)
-                WatchBleManager.SECONDARY_NOTIFY_UUID -> readBattery(gatt)
+                        ?: onNotificationsEnabled?.invoke()
+                WatchBleManager.SECONDARY_NOTIFY_UUID -> onNotificationsEnabled?.invoke()
             }
-        }
-    }
-
-    private fun readBattery(gatt: BluetoothGatt) {
-        val char = batteryCharacteristic ?: return
-        try {
-            gatt.readCharacteristic(char)
-        } catch (e: SecurityException) {
-            packetLogger.log("GATT", "SecurityException reading battery: ${e.message}")
         }
     }
 
@@ -217,28 +185,58 @@ class WatchGattCallback(
         }
     }
 
+    /**
+     * Decode an incoming notification.
+     *
+     * Order of operations is observability-first: we always emit a structured frame
+     * breakdown (head/cmd/key/len/payload/CRC) so a single on-device capture confirms
+     * or corrects the still-unverified IDO V3 framing. We then try to surface battery
+     * from (1) the binary frame payload and (2) an ASCII-JSON fallback, updating the
+     * UI whenever either succeeds.
+     */
     private fun parseResponse(value: ByteArray) {
-        if (value.size < 4) return
-        // VeryFit protocol: first byte often 0x02, second byte command type
-        val cmdType = value.getOrNull(1)?.toInt()?.and(0xFF)
-        when (cmdType) {
-            0x04 -> {
-                // MAC address response: 02:04 returns MAC twice
-                val mac = WatchProtocol.parseMacAddressResponse(value)
-                if (mac.isNotBlank()) {
-                    packetLogger.log("PARSE", "MAC address: $mac")
-                    onMacResponse(mac)
-                }
+        if (value.isEmpty()) return
+
+        // 1) Defensive ASCII-JSON path (rare on this transport, but cheap and harmless).
+        if (WatchProtocol.looksLikeJson(value)) {
+            WatchProtocol.parseBatteryInfoFromJson(value)?.let {
+                packetLogger.log("PARSE", "Battery (JSON): level=${it.level}% status=${it.status} voltage=${it.voltage}mV")
+                onBatteryInfo(it)
+                return
             }
-            0x02 -> {
-                packetLogger.log("PARSE", "Device info response")
+            WatchProtocol.parseMacAddressFromJson(value)?.let {
+                packetLogger.log("PARSE", "MAC (JSON): $it")
+                onMacResponse(it)
+                return
             }
-            0x07 -> {
-                packetLogger.log("PARSE", "Status response")
-            }
-            else -> {
-                packetLogger.log("PARSE", "Unknown response type: 0x${cmdType?.toString(16)?.padStart(2, '0')}")
-            }
+            packetLogger.log("PARSE", "JSON notification (unmapped): ${value.toString(Charsets.UTF_8)}")
+            return
         }
+
+        // 2) Binary IDO V3 frame path. Log the structured breakdown first.
+        val frame = WatchProtocol.parseFrame(value)
+        if (frame == null) {
+            packetLogger.log("PARSE", "Short/non-frame notification (needs capture): ${value.toHex()}")
+            return
+        }
+        packetLogger.log("FRAME", frame.summary())
+        if (!frame.crcValid) {
+            // Not an error — our framing constants are still hypotheses. Logged so a
+            // capture reveals the real head byte / CRC variant / offsets.
+            packetLogger.log("FRAME", "CRC mismatch: framing hypothesis unconfirmed — capture needed to lock head/cmd/key/CRC")
+        }
+
+        // 3) Best-effort battery from the binary payload (and a whole-frame fallback in
+        //    case the true payload offset differs from our hypothesis).
+        val battery = WatchProtocol.parseBatteryInfoFromBinary(frame.payload)
+            ?: WatchProtocol.parseBatteryInfoFromBinary(value)
+        if (battery != null) {
+            val confidence = if (frame.crcValid) "verified-frame" else "UNVERIFIED-heuristic"
+            packetLogger.log("PARSE", "Battery ($confidence): level=${battery.level}% status=${battery.status} voltage=${battery.voltage}mV")
+            onBatteryInfo(battery)
+            return
+        }
+
+        packetLogger.log("PARSE", "Frame not recognised as battery (cmd=0x%02X key=0x%02X)".format(frame.cmd, frame.key))
     }
 }

@@ -8,7 +8,7 @@ package dev.jaredhq.dashboardandroid.domain.model
  * @property deviceName The advertised Bluetooth device name, if available.
  * @property batteryPercent Battery level (0-100), or null if not yet read.
  * @property mtu Negotiated MTU size (typically 247 after requesting 517).
- * @property macAddress The watch's own MAC address from 02:04 response, or null.
+ * @property macAddress The watch's own MAC address from command 301 response, or null.
  * @property isConnected Whether the watch is currently connected.
  * @property lastSyncedAt Epoch millis of the last successful sync, or null.
  */
