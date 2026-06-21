@@ -35,6 +35,8 @@ class WatchGattCallback(
         private set
     var secondaryNotifyCharacteristic: BluetoothGattCharacteristic? = null
         private set
+    var auxiliaryNotifyCharacteristic: BluetoothGattCharacteristic? = null
+        private set
     var extraEncryptCharacteristic: BluetoothGattCharacteristic? = null
         private set
 
@@ -108,11 +110,13 @@ class WatchGattCallback(
         writeCharacteristic = service.getCharacteristic(WatchBleManager.WRITE_CHARACTERISTIC_UUID)
         notifyCharacteristic = service.getCharacteristic(WatchBleManager.NOTIFY_CHARACTERISTIC_UUID)
         secondaryNotifyCharacteristic = service.getCharacteristic(WatchBleManager.SECONDARY_NOTIFY_UUID)
+        auxiliaryNotifyCharacteristic = service.getCharacteristic(WatchBleManager.AUX_NOTIFY_UUID)
         extraEncryptCharacteristic = service.getCharacteristic(WatchBleManager.EXTRA_ENCRYPT_UUID)
 
         packetLogger.log("GATT", "Write char: ${writeCharacteristic?.uuid}")
         packetLogger.log("GATT", "Notify char: ${notifyCharacteristic?.uuid}")
         packetLogger.log("GATT", "Secondary notify char: ${secondaryNotifyCharacteristic?.uuid}")
+        packetLogger.log("GATT", "Auxiliary notify char: ${auxiliaryNotifyCharacteristic?.uuid}")
         packetLogger.log("GATT", "Extra/encrypt char: ${extraEncryptCharacteristic?.uuid}")
         service.characteristics.forEach { ch ->
             packetLogger.log("GATT", "Service char ${ch.uuid} props=0x${ch.properties.toString(16)}")
@@ -150,11 +154,15 @@ class WatchGattCallback(
     }
 
     private fun startNotificationEnablement(gatt: BluetoothGatt) {
-        // Serialize GATT ops: AF7 CCCD → AF2 CCCD.
+        // Serialize GATT ops: AF7 CCCD → AF2 CCCD → AF1 CCCD.
+        // Firmware observed after the VeryFit update exposes 0x0AF1 as a notify
+        // characteristic (props=0x10). Enable it too; battery/decoded data may be
+        // routed there even when AF7 only emits short ACK/status packets.
         // Android GATT has no internal queue; overlapping writes silently fail.
         // onDescriptorWrite chains each step only after the previous one completes.
         notifyCharacteristic?.let { enableNotification(gatt, it) }
             ?: secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+            ?: auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
             ?: onNotificationsEnabled?.invoke()
     }
 
@@ -206,14 +214,20 @@ class WatchGattCallback(
 
     override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
         packetLogger.log("GATT", "onDescriptorWrite ${descriptor.uuid} status=$status")
-        if (descriptor.uuid == WatchBleManager.CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
-            hasEnabledNotifications = true
-            // Chain to the next serialized op now that the previous one has completed.
+        if (descriptor.uuid == WatchBleManager.CCCD_UUID) {
+            if (status == BluetoothGatt.GATT_SUCCESS) hasEnabledNotifications = true
+            else packetLogger.log("GATT", "CCCD write failed for ${descriptor.characteristic.uuid}; continuing notification chain")
+
+            // Chain to the next serialized op now that the previous one completed.
             when (descriptor.characteristic.uuid) {
                 WatchBleManager.NOTIFY_CHARACTERISTIC_UUID ->
                     secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+                        ?: auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
                         ?: onNotificationsEnabled?.invoke()
-                WatchBleManager.SECONDARY_NOTIFY_UUID -> onNotificationsEnabled?.invoke()
+                WatchBleManager.SECONDARY_NOTIFY_UUID ->
+                    auxiliaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+                        ?: onNotificationsEnabled?.invoke()
+                WatchBleManager.AUX_NOTIFY_UUID -> onNotificationsEnabled?.invoke()
             }
         }
     }
@@ -274,7 +288,7 @@ class WatchGattCallback(
         // 2) Binary IDO V3 frame path. Log the structured breakdown first.
         val frame = WatchProtocol.parseFrame(value)
         if (frame == null) {
-            packetLogger.log("PARSE", "Short/non-frame notification (needs capture): ${value.toHex()}")
+            packetLogger.log("PARSE", WatchProtocol.describeShortStatus(value))
             return
         }
         packetLogger.log("FRAME", frame.summary())

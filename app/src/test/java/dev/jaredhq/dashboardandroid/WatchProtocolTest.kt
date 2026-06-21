@@ -80,6 +80,17 @@ class WatchProtocolTest {
         assertTrue(!WatchProtocol.looksLikeJson(byteArrayOf(0xAB.toByte(), 0x01, 0x41)))
     }
 
+    @Test
+    fun describeShortStatus_labelsSixByteAckWithoutPretendingBattery() {
+        val desc = WatchProtocol.describeShortStatus(
+            byteArrayOf(0xAD.toByte(), 0x01, 0x32, 0x00, 0x00, 0x00),
+        )
+        assertTrue(desc.contains("Short status/ACK"))
+        assertTrue(desc.contains("head=0xAD"))
+        assertTrue(desc.contains("key=0x32"))
+        assertTrue(desc.contains("no payload"))
+    }
+
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
         org.junit.Assert.assertArrayEquals(expected, actual)
     }
