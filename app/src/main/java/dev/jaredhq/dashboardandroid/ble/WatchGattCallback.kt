@@ -19,6 +19,7 @@ class WatchGattCallback(
     private val onMtuChanged: (Int) -> Unit,
     private val onBatteryRead: (Int) -> Unit,
     private val onMacResponse: (String) -> Unit,
+    private val onResponseHex: (String) -> Unit = {},
 ) : BluetoothGattCallback() {
 
     var writeCharacteristic: BluetoothGattCharacteristic? = null
@@ -31,6 +32,8 @@ class WatchGattCallback(
         private set
 
     private var hasEnabledNotifications = false
+    // MTU negotiated before service discovery; carried into the initial Connected state.
+    private var negotiatedMtu = 23
 
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
         packetLogger.log("GATT", "onConnectionStateChange status=$status newState=$newState")
@@ -59,6 +62,7 @@ class WatchGattCallback(
     override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
         packetLogger.log("GATT", "onMtuChanged mtu=$mtu status=$status")
         if (status == BluetoothGatt.GATT_SUCCESS) {
+            negotiatedMtu = mtu
             onMtuChanged(mtu)
         }
         // Proceed to service discovery regardless of MTU result
@@ -91,35 +95,27 @@ class WatchGattCallback(
         packetLogger.log("GATT", "Notify char: ${notifyCharacteristic?.uuid}")
         packetLogger.log("GATT", "Secondary notify char: ${secondaryNotifyCharacteristic?.uuid}")
 
-        // Enable notifications on 0x0AF7
-        notifyCharacteristic?.let { char ->
-            enableNotification(gatt, char)
-        }
-
-        // Enable notifications on 0x0AF2 (if present)
-        secondaryNotifyCharacteristic?.let { char ->
-            enableNotification(gatt, char)
-        }
-
-        // Read battery from standard GATT 0x180F service
+        // Cache battery characteristic for the sequential read chain below
         val batteryService = gatt.getService(WatchBleManager.BATTERY_SERVICE_UUID)
         batteryCharacteristic = batteryService?.getCharacteristic(WatchBleManager.BATTERY_LEVEL_UUID)
-        batteryCharacteristic?.let { char ->
-            try {
-                gatt.readCharacteristic(char)
-            } catch (e: SecurityException) {
-                packetLogger.log("GATT", "SecurityException reading battery: ${e.message}")
-            }
-        }
 
-        // Transition to Connected state once everything is set up
+        // Transition to Connected immediately so the UI is responsive; battery and
+        // MAC come in as subsequent state updates once the GATT op chain below finishes.
         val device = gatt.device
         onStateChange(
             WatchConnectionState.Connected(
                 deviceAddress = device?.address ?: "unknown",
                 deviceName = device?.name,
+                mtu = negotiatedMtu,
             )
         )
+
+        // Serialize GATT ops: AF7 CCCD → AF2 CCCD → battery read.
+        // Android GATT has no internal queue; overlapping writes silently fail.
+        // onDescriptorWrite chains each step only after the previous one completes.
+        notifyCharacteristic?.let { enableNotification(gatt, it) }
+            ?: secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+            ?: readBattery(gatt)
     }
 
     override fun onCharacteristicChanged(
@@ -129,6 +125,7 @@ class WatchGattCallback(
     ) {
         packetLogger.log("RX", "${characteristic.uuid}: ${value.toHex()}")
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_RX, characteristic.uuid.toString(), value)
+        onResponseHex(value.toHex())
         parseResponse(value)
     }
 
@@ -141,6 +138,7 @@ class WatchGattCallback(
         }
         packetLogger.log("RX", "${characteristic.uuid}: ${value.toHex()}")
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_RX, characteristic.uuid.toString(), value)
+        onResponseHex(value.toHex())
         parseResponse(value)
     }
 
@@ -175,6 +173,22 @@ class WatchGattCallback(
         packetLogger.log("GATT", "onDescriptorWrite ${descriptor.uuid} status=$status")
         if (descriptor.uuid == WatchBleManager.CCCD_UUID && status == BluetoothGatt.GATT_SUCCESS) {
             hasEnabledNotifications = true
+            // Chain to the next serialized op now that the previous one has completed.
+            when (descriptor.characteristic.uuid) {
+                WatchBleManager.NOTIFY_CHARACTERISTIC_UUID ->
+                    secondaryNotifyCharacteristic?.let { enableNotification(gatt, it) }
+                        ?: readBattery(gatt)
+                WatchBleManager.SECONDARY_NOTIFY_UUID -> readBattery(gatt)
+            }
+        }
+    }
+
+    private fun readBattery(gatt: BluetoothGatt) {
+        val char = batteryCharacteristic ?: return
+        try {
+            gatt.readCharacteristic(char)
+        } catch (e: SecurityException) {
+            packetLogger.log("GATT", "SecurityException reading battery: ${e.message}")
         }
     }
 
