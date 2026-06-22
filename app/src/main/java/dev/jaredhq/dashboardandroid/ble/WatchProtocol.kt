@@ -282,6 +282,53 @@ object WatchProtocol {
         return "Captured 33 DA AD frame: declaredLen=$declaredLen raw=${data.toHex()}"
     }
 
+    // ── Activity protocol version (distinct from firmware version) ─────────────────
+    //
+    // The reference activity parser keys everything off a data section that begins at
+    // offset 25 of the *reassembled* `33 DA AD` activity buffer, with the activity
+    // version as the first byte there. Only version 16 is decodable today. This is a
+    // SEPARATE number from [WatchBasicInfo.firmwareVersion] (offset 4 of the `02 01`
+    // basic-info packet, commonly 1). Conflating the two — e.g. treating
+    // firmwareVersion 1 as "unsupported activity version" — is the bug this scoping
+    // exists to prevent. Full activity/TCX reassembly is intentionally NOT implemented
+    // yet (BLE stability + basic info come first); these helpers only let the eventual
+    // reassembler check the version without crashing the connection.
+
+    /** Offset of the activity data section within a reassembled `33 DA AD` buffer. */
+    const val ACTIVITY_DATA_OFFSET = 25
+
+    /** The only activity-data version the reference parser can decode. */
+    const val SUPPORTED_ACTIVITY_VERSION = 16
+
+    /**
+     * Read the activity-data version (first byte of the data section at
+     * [ACTIVITY_DATA_OFFSET]) from a reassembled activity buffer, or null when the
+     * buffer is too short to contain it. Never throws.
+     */
+    fun activityVersion(activityBuffer: ByteArray): Int? =
+        if (activityBuffer.size > ACTIVITY_DATA_OFFSET) {
+            activityBuffer[ACTIVITY_DATA_OFFSET].toInt() and 0xFF
+        } else {
+            null
+        }
+
+    /** True only for the activity-data version the parser supports. */
+    fun isSupportedActivityVersion(version: Int): Boolean = version == SUPPORTED_ACTIVITY_VERSION
+
+    /**
+     * Structured, non-fatal description of an activity version. Callers should log this
+     * and skip activity decoding for an unsupported version rather than tearing down the
+     * BLE connection.
+     */
+    fun describeActivityVersion(version: Int): String =
+        if (isSupportedActivityVersion(version)) {
+            "Activity version $version supported"
+        } else {
+            "Unsupported activity-data version: $version (only $SUPPORTED_ACTIVITY_VERSION is decodable). " +
+                "Skipping activity decode; BLE connection unaffected. NOTE: this is the activity-data " +
+                "version, not firmware_version from basic info."
+        }
+
     // ── Battery extraction (two independent, clearly-labelled strategies) ─────────
 
     /**
@@ -305,27 +352,81 @@ object WatchProtocol {
         return WatchBatteryInfo(level = level, status = status, voltage = voltage, mode = 0)
     }
 
+    // ── Basic info (`02 01`) ──────────────────────────────────────────────────────
+
+    /** Minimum length of a basic-info packet: header (0,1) through battery (offset 7). */
+    private const val BASIC_INFO_MIN_LEN = 8
+
     /**
-     * Parse the capture-observed response to `WRITE 0x0AF6: 02 01`.
+     * Strict parser for the basic-info response to `WRITE 0x0AF6: 02 01`.
      *
      * Observed notification:
-     * `02 01 D8 1E 01 01 00 5F 01 00 01 00 5A 02 02 03 06 00`.
-     * Byte 7 (`0x5F` = 95) is the only plausible battery percentage in the stable
-     * status block; keep this labelled as capture-derived until more samples confirm
-     * the surrounding fields.
+     * `02 01 D8 1E 01 01 00 5F 01 00 01 00 5A 02 02 03 06 00`
+     * → deviceId `D8 1E` = 7896 (watch-verified), firmwareVersion (offset 4) = 1,
+     *   battery (offset 7) `0x5F` = 95% (watch-verified).
+     *
+     * Returns null unless the packet starts with the `02 01` header and is long enough
+     * to contain the core fields (through battery at offset 7). Trailing fields beyond
+     * the buffer are returned as null rather than throwing, so a short-but-valid frame
+     * still yields device id / firmware / battery.
+     *
+     * ⚠ [WatchBasicInfo.firmwareVersion] (offset 4) is NOT the activity protocol
+     * version. See [WatchBasicInfo] and [isSupportedActivityVersion]. Never gate the
+     * BLE flow on firmwareVersion.
      */
-    fun parseBatteryInfoFromCapturedStatus(payload: ByteArray): WatchBatteryInfo? {
-        if (payload.size < 8) return null
-        if (payload[0] != 0x02.toByte() || payload[1] != 0x01.toByte()) return null
-        val level = payload[7].toInt() and 0xFF
-        if (level !in 0..100) return null
+    fun parseBasicInfo(packet: ByteArray): WatchBasicInfo? {
+        if (packet.size < BASIC_INFO_MIN_LEN) return null
+        if (packet[0] != 0x02.toByte() || packet[1] != 0x01.toByte()) return null
+
+        fun u8(offset: Int): Int? =
+            if (offset < packet.size) packet[offset].toInt() and 0xFF else null
+
+        // device_id: 16-bit little-endian signed short (matches the JS reference's
+        // getInt16(..., littleEndian); 0x1ED8 stays positive = 7896).
+        val deviceId = (((packet[2].toInt() and 0xFF) or ((packet[3].toInt() and 0xFF) shl 8))
+            .toShort().toInt())
+
+        return WatchBasicInfo(
+            deviceId = deviceId,
+            firmwareVersion = packet[4].toInt() and 0xFF, // offset 4 — NOT offset 1
+            mode = packet[5].toInt() and 0xFF,
+            batteryStatus = packet[6].toInt() and 0xFF,
+            batteryLevel = packet[7].toInt() and 0xFF,
+            pair = u8(8),
+            reboot = u8(9),
+            bindConfirmFlag = u8(11),
+            platform = u8(12),
+            shape = u8(13),
+            devType = u8(14),
+            userDefinedDial = u8(15),
+            cloudClockDial = u8(16),
+            showBindChoice = u8(17),
+            bootloadVersion = u8(18),
+            gpsPlatform = u8(19),
+        )
+    }
+
+    /**
+     * Derive battery info from a parsed [WatchBasicInfo], applying a 0..100 sanity gate
+     * so a noise frame that happens to pass the `02 01` header check is not surfaced as
+     * a bogus battery reading. Returns null when the level is implausible.
+     */
+    fun batteryFromBasicInfo(info: WatchBasicInfo): WatchBatteryInfo? {
+        if (info.batteryLevel !in 0..100) return null
         return WatchBatteryInfo(
-            level = level,
+            level = info.batteryLevel,
             status = WatchBatteryInfo.BATTERY_STATE_NORMAL,
             voltage = 0,
             mode = 0,
         )
     }
+
+    /**
+     * Parse battery from the capture-observed `02 01` response. Thin wrapper over
+     * [parseBasicInfo] + [batteryFromBasicInfo], kept for the existing battery code path.
+     */
+    fun parseBatteryInfoFromCapturedStatus(payload: ByteArray): WatchBatteryInfo? =
+        parseBasicInfo(payload)?.let { batteryFromBasicInfo(it) }
 
     /**
      * Parse battery level from the capture-verified `02 A7` poll response.

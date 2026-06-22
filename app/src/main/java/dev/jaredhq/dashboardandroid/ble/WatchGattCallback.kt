@@ -319,10 +319,20 @@ class WatchGattCallback(
 
         // 2) Capture-verified response paths (watch-verified from btsnoop).
 
-        // 02:01 status probe response — byte[7] = battery %.
-        WatchProtocol.parseBatteryInfoFromCapturedStatus(value)?.let {
-            packetLogger.log("PARSE", "Battery (02:01 status, watch-verified): level=${it.level}%")
-            onBatteryInfo(it)
+        // 02:01 basic-info response — full struct (deviceId/firmware/battery/...).
+        // firmwareVersion here is the BASIC-INFO firmware byte (offset 4, commonly 1);
+        // it is NOT the activity-data version and must never gate the BLE flow.
+        WatchProtocol.parseBasicInfo(value)?.let { info ->
+            packetLogger.log(
+                "PARSE",
+                "Basic info (02:01, watch-verified): deviceId=${info.deviceId} fw=${info.firmwareVersion} " +
+                    "battery=${info.batteryLevel}% battStatus=${info.batteryStatus} mode=${info.mode} " +
+                    "platform=${info.platform} devType=${info.devType}",
+            )
+            WatchProtocol.batteryFromBasicInfo(info)?.let { battery ->
+                packetLogger.log("PARSE", "Battery (from 02:01 basic info): level=${battery.level}%")
+                onBatteryInfo(battery)
+            }
             return
         }
         // 02:A7 battery poll response — byte[5] = battery %.
