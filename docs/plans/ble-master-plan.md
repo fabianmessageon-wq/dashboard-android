@@ -4,7 +4,26 @@
 
 Build an independent Android-dashboard bridge for the Kogan Active 4 Pro smartwatch, avoiding VeryFit/vendor/cloud/third-party health platforms. The watch data flows: Active 4 Pro → dashboard-android app → self-hosted dashboard API.
 
-> ## ⚠ Evidence correction (2026-06-21)
+> ## ✅ Evidence update (2026-06-22) — supersedes the 2026-06-21 correction below
+>
+> A fresh on-device btsnoop capture (`btsnoop_hci.log`, analysed with `tshark`) plus a
+> live run of the dashboard app on a Galaxy S21 against the real watch **resolved
+> several previously-"unknown"/"disproven" rows** — and reversed one of them:
+>
+> | Claim | Updated status (2026-06-22) |
+> |---|---|
+> | `02:04` / `02:01` / `02:A7` raw 2-byte commands | ✅ **WATCH-VERIFIED as the real transport for status/identity.** This *reverses* the 2026-06-21 "disproven" row: the watch genuinely accepts these 2-byte writes on `0AF6` and answers on `0AF7`. `02 04`→MAC, `02 01`→status (battery byte[7]), `02 A7`→battery (byte[5]). Confirmed in capture **and** live. |
+> | Battery without standard `0x180F` | ✅ **Confirmed** — battery comes from the `02:01`/`02:A7` responses, two samples (95% capture, 90% live) confirming the byte offsets |
+> | MAC/device identity | ✅ **Confirmed** — `02 04` returns the MAC `F4:91:29:51:C6:45` (matches the BLE address) |
+> | `0x33 / DA AD DA AD` long frames | Still **binary, unverified internals** — the long health-sync frames remain to be decoded (Stage 2 instrumentation) |
+> | Wire is binary IDO frames, JSON only at native boundary | Holds **for the long sync frames**, but the basic status/identity requests are simple 2-byte opcodes, not opaque native-framed packets |
+>
+> Net: Phase 1 (connect + status/battery/MAC) is **done and verified on hardware**.
+> The binary `0x33`/`0xD1` health families and broad metrics are still capture-gated.
+>
+> ---
+>
+> ## ⚠ Evidence correction (2026-06-21) — partially superseded (see 2026-06-22 above)
 >
 > This plan predates confirmation of the native protocol boundary. The APK proves a
 > specific architecture that changes how several phases must be implemented. Honest
@@ -15,25 +34,24 @@ Build an independent Android-dashboard bridge for the Kogan Active 4 Pro smartwa
 > | BLE UUIDs (`0x0AF0`/`0AF6`/`0AF7`/`0AF2`) | **Confirmed** | `com.ido.ble.bluetooth.utils.frost`; native `protocoDataF2` |
 > | Native sync entry points (`StartSyncHealthData`, `WriteJsonData`, …) | **Confirmed (Java↔native API)** | JNI exports in `libVeryFitMulti.so` |
 > | Health **type IDs** (1–20, 7001–7019) | **Confirmed as native/JSON-boundary IDs** | native strings + `SyncV3Handler` |
-> | Wire is **binary IDO frames**, JSON only at the native boundary | **Confirmed** | `WriteJsonData(json)`→native frames bytes; `ReceiveDatafromBle(byte[])` takes raw binary; `CallBackJsonData` returns JSON |
-> | `02:04`/`02:02`/`02:07` raw 2-byte commands | **Disproven as the real transport** | app never hand-writes opcodes; native generates the frame. The `02:04` was capture-derived and is now a research target, not a deliverable |
+> | Wire is **binary IDO frames**, JSON only at the native boundary | **Confirmed for long sync frames** | `WriteJsonData(json)`→native frames bytes; `ReceiveDatafromBle(byte[])` takes raw binary; `CallBackJsonData` returns JSON |
+> | ~~`02:04`/`02:02`/`02:07` raw 2-byte commands disproven~~ | **↑ REVERSED 2026-06-22 — these ARE the real transport for status/identity (see update above)** | on-device btsnoop + live run |
 > | Battery via standard `0x180F`/`0x2A19` | **Not reliable on this watch** | notes say "if readable"; impl removed the read and uses the IDO battery request |
-> | `0x33 / DA AD DA AD` frame + CRC-16/CCITT-FALSE | **Plausible but unverified here** | CRC matches native `crc16_compute`; frame shape is consistent with native `head fixed`/`cmd`/`key`/`nseq`/`len` strings, but the cited capture session is **not in this repo** and per-field/per-command meaning is uncaptured |
-> | Exact per-request **cmd/key**, head byte, payload structs | **Unknown — requires focused BLE capture** | live inside the stripped native lib; not in any string |
+> | `0x33 / DA AD DA AD` frame + CRC-16/CCITT-FALSE | **Plausible but unverified here** | CRC matches native `crc16_compute`; frame shape is consistent with native `head fixed`/`cmd`/`key`/`nseq`/`len` strings; per-field/per-command meaning still uncaptured |
+> | Exact per-request **cmd/key**, head byte, payload structs (long frames) | **Unknown — requires focused capture/instrumentation** | live inside the stripped native lib; not in any string |
 > | Which metrics this watch actually supports | **Must be capability-gated** | native `support_*` / function-table feature flags; APK schema ≠ device support |
 >
-> Rule of thumb for everything below: **"APK-confirmed at the native boundary" ≠
-> "verified on the BLE wire."** Treat any raw command bytes, frame field, or metric
-> availability as **capture-gated / capability-gated** until a focused capture or the
-> device function table proves it. The implemented `ble/` source already follows this
-> (binary IDO frame builder + parser, all unverified parts labelled).
+> Rule of thumb for the still-unverified parts: **"APK-confirmed at the native
+> boundary" ≠ "verified on the BLE wire."** Treat the long `0x33`/`0xD1` frames and
+> per-metric availability as **capture-gated / capability-gated** until a focused
+> capture or the device function table proves it.
 
 ## Context
 
 - **Watch:** Kogan Active 4 Pro (rebranded IDO/VeryFit device)
 - **Official app:** VeryFit (`com.watch.life` v3.4.0), uses IDO BLE SDK with native protocol library (`libVeryFitMulti.so`)
 - **Dashboard Android app:** Native Kotlin + Jetpack Compose, minSdk 26, compileSdk 34
-- **Protocol:** BLE GATT, service `0x0AF0`, custom binary protocol. Command "families" `0x02`, `0x03`, `0x33`, `0xD1` are **capture-observed/hypothesised**, not wire-verified here — and the native lib (not Java) generates the actual frames (see Evidence correction). The `0x02` two-byte form in particular is superseded.
+- **Protocol:** BLE GATT, service `0x0AF0`, custom binary protocol. The `0x02` family two-byte commands (`02 04` MAC, `02 01` status, `02 A7` battery) are **watch-verified** (capture + live run, 2026-06-22). The longer `0x33`/`0xD1` health-sync families remain **capture-observed/hypothesised** and need decoding (see Evidence update).
 - **APK location:** `/home/apolytus/workspace/veryfit-3-4-0.apk`
 - **PKS investigation note:** `engineering/reviews/active-4-pro-veryfit-ble-protocol-investigation-initial-apk-findings.md`
 
@@ -98,30 +116,33 @@ V3 health data type IDs (native):
 
 ## Phase 1: BLE Proof of Concept ✅
 
-**Status:** Implemented (uncommitted)
+**Status:** ✅ Done and **verified on hardware** (2026-06-22), uncommitted
 
 **Objective:** Connect to watch, perform basic handshake, read battery, log raw events.
 
 **Deliverables:**
-- Scan for and connect to Active 4 Pro
-- Discover service `0x0AF0`
-- Request MTU 517, expect negotiated 247
-- Enable notifications on `0x0AF7` and `0x0AF2`
-- ~~Write `02:04` command to `0x0AF6`, confirm MAC response~~ → Write a **binary IDO
-  V3 frame** to `0x0AF6`; cmd/key UNVERIFIED, capture-gated (see Evidence correction)
-- ~~Read battery via standard GATT `0x180F`~~ → Request battery over the **IDO
-  protocol**; `0x180F` is not relied on
-- Log raw protocol events (developer-only in-memory ring buffer), including a
-  structured frame breakdown per notification to drive the confirming capture
-- Display connection status and telemetry in new "Watch" tab
+- Scan for and connect to Active 4 Pro ✅ (matched by static MAC `F4:91:29:51:C6:45`)
+- Discover service `0x0AF0` ✅
+- Request MTU 517, expect negotiated 247 ✅
+- Enable notifications on `0x0AF7` and `0x0AF2` ✅
+- Write `02 04` to `0x0AF6`, confirm MAC response ✅ **watch-verified** — the 2-byte
+  command works; response `02 04 <mac×2>` → MAC bytes[2..7]. (The `AB`-header binary
+  IDO frame builder is retained for the still-unverified long `0x33` sync frames.)
+- ~~Read battery via standard GATT `0x180F`~~ → Battery from `02 01` (byte[7]) and
+  `02 A7` (byte[5]) notification responses ✅ **watch-verified** (two samples)
+- Log raw protocol events (developer-only ring buffer + logcat mirror, tag `WatchBLE`) ✅
+- Display connection status and telemetry in new "Watch" tab ✅
 
-**Files:** See `docs/plans/ble-phase-1-probe.md` for detailed architecture. See `docs/plans/ble-protocol-reverse-engineering-plan.md` for the scalable VeryFit-as-oracle plan; avoid expanding the one-capture/one-parser workflow for every metric.
+**Files:** See `docs/plans/ble-phase-1-probe.md` for detailed architecture + the live
+verification log. See `docs/plans/ble-protocol-reverse-engineering-plan.md` for the
+scalable VeryFit-as-oracle plan; avoid expanding the one-capture/one-parser workflow
+for every metric.
 
-**Verification:**
-1. `./gradlew testDebugUnitTest`
-2. `./gradlew assembleDebug`
-3. Install on Samsung S21, pair with Active 4 Pro
-4. Confirm scan → connect → notifications enabled → raw frame breakdown logged.
+**Verification:** ✅ all done — see the verification table in `ble-phase-1-probe.md`.
+1. `./gradlew testDebugUnitTest` ✅
+2. `./gradlew assembleDebug` ✅
+3. Installed on Samsung Galaxy S21 (Android 14), connected to Active 4 Pro ✅
+4. scan → connect → MTU 247 → notifications → write → RX (battery/MAC) all confirmed ✅
    Battery/MAC display is **best-effort until a capture confirms the framing** — a
    blank battery field is expected, not a defect, until then.
 
@@ -489,17 +510,16 @@ exposing it. Prioritize based on user need. Do **not** assume raw command IDs.
 
 ## Verification Checklist by Phase
 
-### Phase 1
-- [ ] `./gradlew testDebugUnitTest` passes
-- [ ] `./gradlew assembleDebug` builds
-- [ ] Scan finds Active 4 Pro
-- [ ] Connect succeeds
-- [ ] Notifications enabled on `0x0AF7`/`0x0AF2`
-- [ ] Raw packet log visible, with per-notification frame breakdown
-- [ ] **Capture taken** of the VeryFit app (battery/device-info) and diffed against
-      `WatchProtocol.parseFrame` — *prerequisite for the two below*
-- [ ] Battery decodes from the IDO protocol *(capture-gated — not via `0x180F`)*
-- [ ] MAC/device-info decodes from the captured frame *(capture-gated — not `02:04`)*
+### Phase 1 — ✅ COMPLETE & verified on hardware (2026-06-22)
+- [x] `./gradlew testDebugUnitTest` passes
+- [x] `./gradlew assembleDebug` builds
+- [x] Scan finds Active 4 Pro *(matched by static MAC `F4:91:29:51:C6:45`; it advertises with no name)*
+- [x] Connect succeeds *(note: toggle Bluetooth if `status=133` — dual-mode Classic/LE contention)*
+- [x] Notifications enabled on `0x0AF7`/`0x0AF2`
+- [x] Raw packet log visible, with per-notification frame breakdown *(also mirrored to logcat tag `WatchBLE`)*
+- [x] **Capture taken** of the VeryFit app (`btsnoop_hci.log`) and analysed with `tshark`
+- [x] Battery decodes from the IDO protocol *(`02 01` byte[7] / `02 A7` byte[5]; two samples confirm offsets — not via `0x180F`)*
+- [x] MAC/device-info decodes *(`02 04` → MAC bytes[2..7], watch-verified — the 2-byte command works)*
 
 ### Phase 2
 - [x] Android: telemetry DTO/mapper + `syncWatch` API path (unit-tested)
@@ -556,7 +576,9 @@ exposing it. Prioritize based on user need. Do **not** assume raw command IDs.
 - Phase 1 detailed plan: `docs/plans/ble-phase-1-probe.md`
 - Phone app improvements: `docs/plans/phone-app-improvements.md`
 - APK: `/home/apolytus/workspace/veryfit-3-4-0.apk`
-- Bluetooth capture analysis: session `20260621_010233_b4f7a6` — **raw artifacts not
-  present in this repo/environment.** Any "from capture"/"verified against capture"
-  statement in this plan therefore cannot be re-verified here and must be re-captured
-  before implementation relies on it (notably the `0x33`/`0xD1` framing and `02:04`).
+- Bluetooth capture analysis: a fresh `btsnoop_hci.log` (captured 2026-06-22 from the
+  official VeryFit app, analysed with `tshark`) **is** available and locked the
+  watch-verified `0x02`-family commands (`02 04`/`02 01`/`02 A7`) now in
+  `WatchProtocol.kt`. The older session `20260621_010233_b4f7a6` artifacts were not
+  present; this newer capture supersedes that gap. Still outstanding: the `0x33`/`0xD1`
+  long-frame internals, which need Stage 2 instrumentation (see reverse-engineering plan).

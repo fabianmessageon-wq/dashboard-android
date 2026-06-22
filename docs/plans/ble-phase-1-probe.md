@@ -4,29 +4,60 @@
 
 Build a minimal BLE proof-of-concept in dashboard-android that can connect to the Kogan Active 4 Pro smartwatch (VeryFit/IDO BLE protocol), perform basic protocol handshake, read battery, and log raw events.
 
-> ## ⚠ Correction (2026-06-21) — read before implementing
+> ## ✅ VERIFIED ON REAL HARDWARE (2026-06-22) — read first
+>
+> Phase 1 is **complete and proven on-device.** Built with Android Studio's bundled
+> JDK 17 + Gradle 8.10.2, installed on a Samsung Galaxy S21 (Android 14) over ADB
+> Wi-Fi, and run against the real Kogan Active 4 Pro. Every Phase-1 objective passed
+> (logcat tag `WatchBLE`):
+>
+> | Step | Result |
+> |------|--------|
+> | Scan | Matched watch at static address `F4:91:29:51:C6:45` (advert carried no name) |
+> | Connect | `onConnectionStateChange status=0 newState=2` |
+> | MTU | Negotiated **247** |
+> | Service discovery | `0x0AF0` found; AF6 (0xe) / AF7 (0x12) / AF2 (0x12) / AF1 (0xe) |
+> | Notifications | CCCD on AF7 + AF2 → `onDescriptorWrite status=0` (AF1 has no notify bit, skipped) |
+> | Write | `02 04`, `02 01`, `02 A7` → `onCharacteristicWrite status=0` |
+> | RX | MAC `F4:91:29:51:C6:45` parsed; **battery 90%** from both `02:01` and `02:A7` |
+>
+> **The 2026-06-21 "Correction" below is itself now DISPROVEN by an on-device
+> btsnoop capture of the official VeryFit app.** The real wire protocol *does* use
+> short 2-byte commands — `02 04` (MAC), `02 01` (status), `02 A7` (battery) — not
+> opaque binary IDO frames for these requests. `WatchProtocol.kt` was corrected to
+> build and parse these watch-verified commands; the `AB`-header IDO V3 frame
+> builder is retained only for future/long-sync frames. Battery byte offsets:
+> `02:01` response byte[7], `02:A7` response byte[5] (both `0x5A` = 90% live).
+>
+> **Two operational notes for reproducing:**
+> 1. The watch is **dual-mode**. While its Classic BR/EDR link (HID/Handsfree/A2DP)
+>    is active, `connectGatt(TRANSPORT_LE)` returns **status=133**. Remedy (works):
+>    `adb shell cmd bluetooth_manager disable` then `enable`, then connect.
+> 2. Short `07 40 1F 00…` transport-ACK frames must NOT be parsed as battery — the
+>    raw heuristic would misread `0x07` as "7%". The GATT callback now only trusts
+>    the binary battery heuristic on CRC-valid frames (regression test added).
+>
+> ---
+>
+> ## ⚠ Correction (2026-06-21) — SUPERSEDED by the 2026-06-22 capture above
 >
 > This plan was written before the native protocol boundary was confirmed. Two of
 > its original assumptions are **superseded**; the current `ble/` source no longer
 > follows them. Apply these corrections wherever the steps below still say "02:04"
 > or "0x180F":
 >
-> 1. **No raw `02:04`/`02:02`/`02:07` two-byte commands.** The official app does not
->    hand-write short commands; it calls `Protocol.WriteJsonData(json, type)` and the
->    **native lib (`libVeryFitMulti.so`) frames the bytes into a binary IDO packet**
->    before the GATT write. Inbound notifications are fed back as **raw binary** via
->    `Protocol.ReceiveDatafromBle(byte[])` and decoded to JSON in native
->    (`CallBackJsonData`). **JSON exists only at the Java↔native boundary — the BLE
->    wire carries binary IDO frames, never JSON and never ad-hoc 2-byte opcodes.**
->    The exact frame `head/cmd/key/seq/len/CRC` and the per-request cmd/key are
->    **unverified** (the `02:04` came from a capture session that is not present in
->    this repo) and require a focused BLE capture to lock down. `WatchProtocol.kt`
->    now builds a binary IDO V3 frame and is explicitly marked UNVERIFIED.
+> 1. ~~**No raw `02:04`/`02:02`/`02:07` two-byte commands.**~~ **DISPROVEN** — the
+>    btsnoop capture shows the watch *does* accept and answer 2-byte commands. The
+>    JSON↔native boundary reasoning held for the long binary sync frames, but the
+>    basic status/identity requests are simple 2-byte opcodes. Original (now
+>    incorrect) reasoning kept for history: *the official app calls
+>    `Protocol.WriteJsonData(json, type)` and the native lib frames bytes into a
+>    binary IDO packet; JSON exists only at the Java↔native boundary.*
 > 2. **Battery does not come from the standard Battery Service.** `0x180F`/`0x2A19`
 >    is only "if the watch exposes it"; on this watch it was not a reliable source,
 >    so the implementation **removed the 0x180F read** and requests battery over the
->    IDO protocol instead (native data-type `321`, frame unverified). The watch may
->    also push battery unsolicited on connect.
+>    IDO protocol instead. ✅ Confirmed: battery comes from the `02:01`/`02:A7`
+>    notification responses on `0x0AF7`, not from a standard Battery Service.
 >
 > What remains correct: the UUIDs, the connect→MTU→notify(0x0AF7/0x0AF2)→write(0x0AF6)
 > sequence, the developer raw-event logger, and the Phase 2 telemetry upload.
@@ -133,19 +164,24 @@ Runtime permission handling for Android 12+ (`BLUETOOTH_SCAN`, `BLUETOOTH_CONNEC
 
 ### Step 4: Protocol Commands
 
-> **Superseded.** The original `byteArrayOf(0x02, 0x04)` opcodes do not match the
-> real transport (native frames binary IDO packets — see Correction). The shipped
-> `WatchProtocol` instead:
+> ✅ **Watch-verified (2026-06-22).** The 2-byte opcodes ARE the real transport for
+> status/identity (the 2026-06-21 "superseded" note was wrong — see the verification
+> block at the top). The shipped `WatchProtocol`:
 
-- `buildRequestFrame(dataType)` → assembles a binary IDO V3 frame
-  `head | cmd | key | seq | version | len | payload | crc16` — **UNVERIFIED**
-  head byte and cmd/key, retained so a frame can be diffed against a capture.
-- `buildBatteryInfoCommand()` / `buildMacAddressCommand()` / `buildDeviceInfoCommand()`
-  → typed wrappers over `buildRequestFrame` (native data-types 321 / 301 / 300).
+- `buildMacAddressCommand()` → `02 04`; response `02 04 <mac×2>`, MAC = bytes[2..7]
+  (`parseMacAddressFromCapturedMacResponse`). **Watch-verified.**
+- `buildBatteryInfoCommand()` → `02 A7`; response battery = byte[5]
+  (`parseBatteryInfoFromCapturedBatteryPoll`). **Watch-verified.**
+- `buildCapturedStatusProbeCommand()` → `02 01`; response battery = byte[7]
+  (`parseBatteryInfoFromCapturedStatus`). **Watch-verified.**
+- `buildRequestFrame(dataType)` / `buildFrame(...)` → assembles an `AB`-header binary
+  IDO V3 frame `head | cmd | key | seq | version | len | payload | crc16`. **Retained
+  for the still-unverified long `0x33` health-sync frames**, not used for the basic
+  status/identity requests above.
 - `parseFrame(bytes)` → structured view (head/cmd/key/len/payload/CRC, both CRC16
-  variants) for capture-confirmation logging.
-- `parseBatteryInfoFromBinary` (heuristic) + `parseBatteryInfoFromJson` (defensive
-  fallback) — battery surfaces whenever either succeeds.
+  variants) for diagnostic logging of the long frames.
+- `parseBatteryInfoFromBinary` (heuristic) — now gated behind `frame.crcValid` in the
+  GATT callback so transport ACKs like `07 40 1F 00…` aren't misread as "7% battery".
 
 ### Step 5: Packet Logger
 
@@ -197,24 +233,25 @@ Upload endpoint: `POST /api/widget/v1/watch/sync` (dashboard side to be implemen
 - Phase 1: manual trigger only (Android BLE restrictions for background)
 - Phase 2: foreground service for auto-sync
 
-## Verification Steps
+## Verification Steps — ✅ ALL COMPLETE (2026-06-22)
 
-1. `./gradlew testDebugUnitTest` — existing tests pass
-2. `./gradlew assembleDebug`
-3. Install on Samsung S21
-4. Enable Bluetooth, ensure watch is nearby
-5. Open Watch tab, tap Scan
-6. Verify "Active 4 Pro" appears in scan results
-7. Tap Connect
-8. Verify status changes: scanning → connecting → connected
-9. Verify MTU shows 247
-10. Verify raw events appear in packet log, and that each notification logs a
-    structured frame breakdown (head/cmd/key/len/payload/CRC)
-11. **Capture step (the real unblock):** run a btsnoop capture of the official
-    VeryFit app requesting battery/device-info, then compare the captured frames to
-    `WatchProtocol`'s output to lock the head byte, battery cmd/key, payload layout,
-    and CRC variant. Until then, battery/MAC display is **best-effort/unverified** —
-    do not treat a blank battery field as a code defect.
+1. ✅ `./gradlew testDebugUnitTest` — all tests pass
+2. ✅ `./gradlew assembleDebug` — builds
+3. ✅ Installed on Samsung Galaxy S21 (Android 14) over ADB Wi-Fi
+4. ✅ Bluetooth on, watch nearby (and VeryFit `com.watch.life` force-stopped)
+5. ✅ Opened Watch tab, tapped Scan
+6. ✅ Watch matched (by static MAC `F4:91:29:51:C6:45` — it advertises with no name,
+   so the keyword filter alone would miss it; the MAC fallback is what catches it)
+7. ✅ Connected
+8. ✅ Status: scanning → connecting → connected
+9. ✅ MTU 247
+10. ✅ Raw events logged; each notification logs a structured breakdown, and the
+    watch-verified `02:01`/`02:A7`/`02:04` responses decode to battery/MAC
+11. ✅ **Capture step DONE (the real unblock):** an on-device btsnoop capture of the
+    official VeryFit app was analysed (`tshark` over `btsnoop_hci.log`). It locked
+    the real commands: write `02 04`→MAC, `02 01`→status(battery byte[7]),
+    `02 A7`→battery(byte[5]). `WatchProtocol.kt` now uses these watch-verified
+    values, and battery/MAC display is **confirmed**, not best-effort.
 
 ## Privacy & Security
 
@@ -267,7 +304,9 @@ Settings device card + developer raw-event viewer. See master plan Phase 2.
 
 - PKS note: `engineering/reviews/active-4-pro-veryfit-ble-protocol-investigation-initial-apk-findings.md`
 - APK: `/home/apolytus/workspace/veryfit-3-4-0.apk`
-- Bluetooth capture analysis: session `20260621_010233_b4f7a6` — **note:** the raw
-  capture artifacts for this session are **not present in this repo/environment**, so
-  any "from capture"/"verified against capture" claim below cannot be re-verified
-  here and must be re-captured before it is relied upon for implementation.
+- Bluetooth capture analysis: a fresh on-device btsnoop (`btsnoop_hci.log`, captured
+  2026-06-22 from the official VeryFit app on the S21) **was** obtained and analysed
+  with `tshark`. It locked the watch-verified commands now in `WatchProtocol.kt`
+  (`02 04` MAC, `02 01` status, `02 A7` battery) and was re-confirmed against the
+  app's own live traffic. The earlier session `20260621_010233_b4f7a6` artifacts were
+  not present; this newer capture supersedes that gap.

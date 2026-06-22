@@ -180,25 +180,39 @@ Pure-JVM unit tests run without a device or emulator:
 
 ## Verification status — IMPORTANT
 
-This project was authored in an environment **without** the Android toolchain
-(no JDK, no Gradle, no Android SDK). Therefore:
+Much of this project was originally authored in an environment **without** the
+Android toolchain. That gate has since been partially lifted — see what is and
+isn't verified below.
 
-- ❌ **Not compiled.** `./gradlew assembleDebug` has **not** been run here.
-- ❌ **Unit tests not executed.** `testDebugUnitTest` has not been run here.
-- ❌ **Not run on a device/emulator.** The Glance widget and WorkManager paths
-  are written against current APIs but have not been exercised at runtime.
-- ✅ **Source/structure complete and self-consistent**, with version-catalogued
-  dependencies and Compose `@Preview`s.
+### ✅ Verified on real hardware (2026-06-22)
+
+The **BLE / Watch path** was built and run end-to-end on a real phone against the
+real watch:
+
+- ✅ **Compiled.** `./gradlew assembleDebug` builds (JDK 17 via Android Studio's
+  bundled `jbr`, Gradle 8.10.2; the wrapper JAR is gitignored — regenerate with
+  `gradle wrapper --gradle-version 8.10.2`).
+- ✅ **Unit tests executed.** `./gradlew testDebugUnitTest` — all passing
+  (including the `WatchProtocol` parsers verified against a real capture).
+- ✅ **Run on a device.** Installed on a Samsung Galaxy S21 (Android 14) over ADB
+  Wi-Fi and exercised against the Kogan Active 4 Pro: scan → connect → MTU 247 →
+  service discovery (`0x0AF0`) → CCCD notify (`0x0AF7`, `0x0AF2`) → write
+  (`0x0AF6`) → RX, with **battery and MAC decoded live** from the watch.
+- ✅ **Protocol watch-verified.** The watch's wire commands (`02 04` MAC,
+  `02 01` status, `02 A7` battery) and their responses were confirmed from an
+  on-device btsnoop capture of the official VeryFit app and re-confirmed live.
+  See `docs/plans/ble-phase-1-probe.md` and
+  `docs/plans/ble-protocol-reverse-engineering-plan.md`.
+
+### ❌ Not yet exercised at runtime
+
+- ❌ **Today / Capture / Settings / widgets / notifications.** The Glance widget,
+  WorkManager refresh, dictation, and dashboard API paths compile and have JVM
+  tests where applicable, but have **not** been driven against a live dashboard
+  on-device in this environment.
 - ✅ **Contract verified against the dashboard server source**, not guessed.
 
-The **Phase 12 additions** (fast-capture widget + deep links, notifications
-bridge + daily quote, brand theme/icon) were likewise written without the Android
-toolchain in this environment — **not compiled or run here.** They follow the
-existing layering and APIs (Glance, WorkManager, `NotificationCompat`) and the
-new contract has a JVM test (`NotificationsMappingTest`), but the same gate
-applies.
-
-**Before relying on it:** open in Android Studio, sync, run
+**Before relying on the dashboard paths:** open in Android Studio, sync, run
 `./gradlew testDebugUnitTest`, then `assembleDebug`, and fix any version-skew the
 local SDK surfaces (most likely AGP/Kotlin/Compose-BOM alignment in
 `gradle/libs.versions.toml`).

@@ -104,11 +104,12 @@ private fun WatchContent(
     onPermissionsDenied: () -> Unit,
 ) {
     val context = LocalContext.current
+    // BLUETOOTH_SCAN is declared neverForLocation in the manifest, so location
+    // permission is not required for scanning on Android 12+.
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.ACCESS_FINE_LOCATION,
         )
     } else {
         arrayOf(

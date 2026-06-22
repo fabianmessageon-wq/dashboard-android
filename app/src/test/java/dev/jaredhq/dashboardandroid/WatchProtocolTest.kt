@@ -62,6 +62,21 @@ class WatchProtocolTest {
     }
 
     @Test
+    fun parseFrame_transportAckIsNotCrcValid_soBatteryHeuristicMustNotFire() {
+        // Real on-device transport/ACK frame observed 2026-06-22 on the watch:
+        // `07 40 1F 00 …`. Its first byte (0x07) would be misread as "7% battery" by the
+        // raw heuristic. The frame's CRC must NOT validate, which is how the GATT callback
+        // gates out this false reading (it only trusts the heuristic on crcValid frames).
+        val ack = byteArrayOf(0x07, 0x40, 0x1F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        val frame = WatchProtocol.parseFrame(ack)
+        assertNotNull(frame)
+        frame!!
+        assertTrue("transport ACK must not pass as a valid IDO frame", !frame.crcValid)
+        // The raw heuristic alone WOULD misread it — proving why the crcValid gate matters.
+        assertEquals(7, WatchProtocol.parseBatteryInfoFromBinary(ack)?.level)
+    }
+
+    @Test
     fun parseBatteryInfoFromJson_handlesNativeKeyShape() {
         val json = """{"level":78,"status":1,"voltage":4200,"mode":0,
             |"lastChargingYear":2026,"lastChargingMonth":6,"lastChargingDay":21,
@@ -121,6 +136,55 @@ class WatchProtocolTest {
         info!!
         assertEquals(95, info.level)
         assertEquals(0, info.voltage)
+    }
+
+    @Test
+    fun parseBatteryInfoFromCapturedBatteryPoll_readsObservedBatteryByte() {
+        // Captured from btsnoop: WRITE 02 A7 → NTF 02 A7 01 01 00 5F 01 D8 1E (watch-verified)
+        val response = byteArrayOf(0x02, 0xA7.toByte(), 0x01, 0x01, 0x00, 0x5F, 0x01, 0xD8.toByte(), 0x1E)
+        val info = WatchProtocol.parseBatteryInfoFromCapturedBatteryPoll(response)
+        assertNotNull(info)
+        info!!
+        assertEquals(95, info.level)
+    }
+
+    @Test
+    fun parseBatteryInfoFromCapturedBatteryPoll_rejectsWrongCommand() {
+        val response = byteArrayOf(0x02, 0x01, 0x00, 0x00, 0x00, 0x5F)
+        assertNull(WatchProtocol.parseBatteryInfoFromCapturedBatteryPoll(response))
+    }
+
+    @Test
+    fun parseBatteryInfoFromCapturedBatteryPoll_rejectsTooShort() {
+        assertNull(WatchProtocol.parseBatteryInfoFromCapturedBatteryPoll(byteArrayOf(0x02, 0xA7.toByte(), 0x01)))
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_extractsWatchMac() {
+        // Captured from btsnoop: NTF 02 04 F4 91 29 51 C6 45 F4 91 29 51 C6 45 (watch-verified)
+        val response = byteArrayOf(
+            0x02, 0x04,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45,
+        )
+        val mac = WatchProtocol.parseMacAddressFromCapturedMacResponse(response)
+        assertEquals("F4:91:29:51:C6:45", mac)
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_rejectsWrongCommand() {
+        val response = byteArrayOf(0x02, 0x01, 0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45)
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(response))
+    }
+
+    @Test
+    fun buildMacAddressCommand_isCaptureVerified() {
+        assertArrayEquals(byteArrayOf(0x02, 0x04), WatchProtocol.buildMacAddressCommand())
+    }
+
+    @Test
+    fun buildBatteryInfoCommand_isCaptureVerified() {
+        assertArrayEquals(byteArrayOf(0x02, 0xA7.toByte()), WatchProtocol.buildBatteryInfoCommand())
     }
 
     @Test

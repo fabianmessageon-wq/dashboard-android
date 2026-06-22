@@ -1,5 +1,6 @@
 package dev.jaredhq.dashboardandroid.ble
 
+import android.util.Log
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -7,6 +8,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * Developer-only diagnostic tool. Never persisted beyond the session.
  * Thread-safe for concurrent access from GATT callbacks and UI reads.
+ *
+ * Entries are also mirrored to Android logcat under the [LOG_TAG] tag so the
+ * documented `adb logcat | grep -i ble` workflow surfaces the live BLE session
+ * on a real phone. The in-memory buffer remains the source of truth for the
+ * in-app log panel and dashboard sync; logcat is a diagnostic mirror only.
  */
 class WatchPacketLogger(private val maxEntries: Int = 200) {
 
@@ -39,6 +45,7 @@ class WatchPacketLogger(private val maxEntries: Int = 200) {
         if (buffer.size > maxEntries) {
             buffer.removeAt(0)
         }
+        Log.d(LOG_TAG, "$tag: $message")
     }
 
     /**
@@ -58,7 +65,12 @@ class WatchPacketLogger(private val maxEntries: Int = 200) {
         if (rawEvents.size > maxEntries) {
             rawEvents.removeAt(0)
         }
+        Log.d(LOG_TAG, "$direction ${shortChar(characteristicUuid)}: ${bytes.joinToString(" ") { "%02x".format(it) }}")
     }
+
+    /** "00000af6-…" → "0xAF6" for compact logcat lines; else the raw UUID. */
+    private fun shortChar(uuid: String): String =
+        if (uuid.length >= 8) "0x${uuid.substring(4, 8).uppercase()}" else uuid
 
     fun getEntries(): List<LogEntry> = buffer.toList()
 
@@ -75,6 +87,9 @@ class WatchPacketLogger(private val maxEntries: Int = 200) {
 
         /** Watch → phone (a notification or read). */
         const val DIRECTION_RX = "watch->phone"
+
+        /** Logcat tag for the mirrored BLE feed (matches `grep -i ble`). */
+        const val LOG_TAG = "WatchBLE"
     }
 
     fun format(): String {

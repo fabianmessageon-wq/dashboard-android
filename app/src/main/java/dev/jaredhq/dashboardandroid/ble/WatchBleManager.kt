@@ -105,13 +105,15 @@ class WatchBleManager(private val context: Context) {
 
     /**
      * Required BLE permissions for Android 12+ (API 31) and below.
+     *
+     * On API 31+, BLUETOOTH_SCAN is declared with neverForLocation in the manifest,
+     * so location permission is not required for scanning.
      */
     val requiredPermissions: Array<String>
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION,
             )
         } else {
             arrayOf(
@@ -301,6 +303,7 @@ class WatchBleManager(private val context: Context) {
      * (0x0AF6). Frames are built by [WatchProtocol]; this method is transport-only.
      */
     fun writeCommand(command: ByteArray): Boolean {
+        if (_state.value !is WatchConnectionState.Connected) return false
         if (bluetoothGatt == null || gattCallback?.writeCharacteristic == null) return false
         pendingCommands.addLast(command)
         drainCommandQueue()
@@ -350,33 +353,31 @@ class WatchBleManager(private val context: Context) {
     }
 
     /**
-     * Send command 301 (0x012D) to request the watch MAC address.
+     * Request the watch MAC address via capture-verified command `02 04`.
+     * Response: `02 04 <mac 6 bytes> <mac 6 bytes>`.
      */
     fun requestMacAddress() {
         val cmd = WatchProtocol.buildMacAddressCommand()
-        packetLogger.log("TX", "CMD_GET_MAC_ADDRESS (301): ${cmd.toHex()}")
+        packetLogger.log("TX", "MAC_ADDRESS req (02:04, watch-verified): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
     /**
-     * Send command 300 (0x012C) to request basic device info.
+     * Request basic device info via capture-observed command `02 02`.
      */
     fun requestDeviceInfo() {
         val cmd = WatchProtocol.buildDeviceInfoCommand()
-        packetLogger.log("TX", "CMD_GET_BASIC_INFO (300): ${cmd.toHex()}")
+        packetLogger.log("TX", "DEVICE_INFO req (02:02, capture-observed): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
     /**
-     * Request battery info via the IDO V3 battery command (native data-type 321).
-     * The watch does not expose the standard BLE battery service, so this is the
-     * intended path. NOTE: the binary cmd/key is still an unverified hypothesis (see
-     * [WatchProtocol]); the watch may also push battery unsolicited on connect, which
-     * the notification parser will catch regardless.
+     * Request battery info via capture-verified command `02 A7`.
+     * Response: `02 A7 xx xx xx <level%> ...`; byte[5] = battery %.
      */
     fun requestBatteryInfo() {
         val cmd = WatchProtocol.buildBatteryInfoCommand()
-        packetLogger.log("TX", "BATTERY_INFO req (type 321, frame UNVERIFIED): ${cmd.toHex()}")
+        packetLogger.log("TX", "BATTERY req (02:A7, watch-verified): ${cmd.toHex()}")
         writeCommand(cmd)
     }
 
@@ -397,21 +398,39 @@ class WatchBleManager(private val context: Context) {
     }
 
     /**
-     * Send a short retry burst of the captured probe. The watch sometimes ignores or
-     * only ACKs the first post-CCCD probe while its app-side status block is still
-     * settling; spaced retries improve first-connect battery reliability without
-     * flooding the GATT queue.
+     * Post-CCCD probe sequence using capture-verified commands. Fires immediately
+     * and then retries the status probe twice, matching the pattern observed in the
+     * official-app btsnoop (MAC → device info → status probe, spaced out).
      */
     private fun requestCapturedStatusProbeBurst() {
-        val delaysMs = longArrayOf(0L, 1_200L, 3_000L)
-        delaysMs.forEachIndexed { index, delayMs ->
-            mainHandler.postDelayed({
-                if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
-                    packetLogger.log("BLE", "Captured 02:01 probe attempt ${index + 1}/${delaysMs.size}")
-                    requestCapturedStatusProbe()
-                }
-            }, delayMs)
-        }
+        // t=0ms: MAC address (02:04, watch-verified)
+        mainHandler.postDelayed({
+            if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
+                packetLogger.log("BLE", "Post-CCCD: MAC probe (02:04)")
+                requestMacAddress()
+            }
+        }, 0L)
+        // t=400ms: status/battery probe (02:01, watch-verified)
+        mainHandler.postDelayed({
+            if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
+                packetLogger.log("BLE", "Post-CCCD: status probe (02:01) attempt 1")
+                requestCapturedStatusProbe()
+            }
+        }, 400L)
+        // t=1000ms: battery poll (02:A7, watch-verified)
+        mainHandler.postDelayed({
+            if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
+                packetLogger.log("BLE", "Post-CCCD: battery poll (02:A7)")
+                requestBatteryInfo()
+            }
+        }, 1_000L)
+        // t=2500ms: retry status probe if battery not yet resolved
+        mainHandler.postDelayed({
+            if (_state.value is WatchConnectionState.Connected && bluetoothGatt != null) {
+                packetLogger.log("BLE", "Post-CCCD: status probe (02:01) attempt 2")
+                requestCapturedStatusProbe()
+            }
+        }, 2_500L)
     }
 
     /** Send an exact tester/capture-provided command frame to 0x0AF6. */
@@ -501,12 +520,24 @@ class WatchBleManager(private val context: Context) {
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         private const val SCAN_TIMEOUT_MS = 20_000L
+
+        /**
+         * Static BLE address of the Kogan Active 4 Pro, confirmed from btsnoop capture.
+         * The `02 04` MAC response also returns `F4:91:29:51:C6:45` — watch-verified.
+         * Used as a hard MAC fallback so the app connects even if the advertising name
+         * doesn't match any keyword pattern.
+         */
+        const val KNOWN_WATCH_MAC = "F4:91:29:51:C6:45"
     }
 }
 
 private fun ScanResult.matchesTargetWatch(): Boolean {
     val advertisedServices = scanRecord?.serviceUuids.orEmpty().map { it.uuid }
     if (WatchBleManager.VERYFIT_SERVICE_UUID in advertisedServices) return true
+
+    // Fallback: match by the btsnoop-verified static BLE address.
+    val address = try { device?.address } catch (_: SecurityException) { null }
+    if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
 
     val name = scanRecord?.deviceName ?: try {
         device?.name

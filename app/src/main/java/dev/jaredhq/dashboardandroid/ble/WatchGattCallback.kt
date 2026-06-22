@@ -207,11 +207,7 @@ class WatchGattCallback(
 
     @Suppress("DEPRECATION")
     override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-        val value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            characteristic.value ?: byteArrayOf()
-        } else {
-            characteristic.value ?: byteArrayOf()
-        }
+        val value = characteristic.value ?: byteArrayOf()
         packetLogger.log("RX", "${characteristic.uuid}: ${value.toHex()}")
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_RX, characteristic.uuid.toString(), value)
         onResponseHex(value.toHex())
@@ -292,12 +288,24 @@ class WatchGattCallback(
             return
         }
 
-        // 2) Capture-observed VeryFit status path. This is the first watch-verified
-        // command/response pair from the official-app btsnoop: WRITE 02 01 -> AF7
-        // status block containing a plausible battery byte.
+        // 2) Capture-verified response paths (watch-verified from btsnoop).
+
+        // 02:01 status probe response — byte[7] = battery %.
         WatchProtocol.parseBatteryInfoFromCapturedStatus(value)?.let {
-            packetLogger.log("PARSE", "Battery (captured 02:01 status): level=${it.level}%")
+            packetLogger.log("PARSE", "Battery (02:01 status, watch-verified): level=${it.level}%")
             onBatteryInfo(it)
+            return
+        }
+        // 02:A7 battery poll response — byte[5] = battery %.
+        WatchProtocol.parseBatteryInfoFromCapturedBatteryPoll(value)?.let {
+            packetLogger.log("PARSE", "Battery (02:A7 poll, watch-verified): level=${it.level}%")
+            onBatteryInfo(it)
+            return
+        }
+        // 02:04 MAC address response — bytes[2..7] = MAC.
+        WatchProtocol.parseMacAddressFromCapturedMacResponse(value)?.let {
+            packetLogger.log("PARSE", "MAC (02:04 response, watch-verified): $it")
+            onMacResponse(it)
             return
         }
         if (WatchProtocol.looksLikeCapturedDaAdFrame(value)) {
@@ -318,17 +326,24 @@ class WatchGattCallback(
             packetLogger.log("FRAME", "CRC mismatch: framing hypothesis unconfirmed — capture needed to lock head/cmd/key/CRC")
         }
 
-        // 3) Best-effort battery from the binary payload (and a whole-frame fallback in
-        //    case the true payload offset differs from our hypothesis).
-        val battery = WatchProtocol.parseBatteryInfoFromBinary(frame.payload)
-            ?: WatchProtocol.parseBatteryInfoFromBinary(value)
-        if (battery != null) {
-            val confidence = if (frame.crcValid) "verified-frame" else "UNVERIFIED-heuristic"
-            packetLogger.log("PARSE", "Battery ($confidence): level=${battery.level}% status=${battery.status} voltage=${battery.voltage}mV")
-            onBatteryInfo(battery)
-            return
+        // 3) Best-effort battery from the binary payload — ONLY when the frame's CRC
+        //    actually validates (i.e. our framing hypothesis is confirmed for this
+        //    frame). Real on-device traffic (verified 2026-06-22) interleaves short
+        //    transport/ACK frames like `07 40 1F 00…` whose first byte (0x07) the
+        //    unverified heuristic would otherwise misread as "7% battery", corrupting
+        //    the correct 90% reading from the watch-verified 02:01/02:A7 paths above.
+        //    Battery is now sourced from those verified paths; this heuristic must not
+        //    push a value it cannot stand behind.
+        if (frame.crcValid) {
+            val battery = WatchProtocol.parseBatteryInfoFromBinary(frame.payload)
+                ?: WatchProtocol.parseBatteryInfoFromBinary(value)
+            if (battery != null) {
+                packetLogger.log("PARSE", "Battery (verified-frame): level=${battery.level}% status=${battery.status} voltage=${battery.voltage}mV")
+                onBatteryInfo(battery)
+                return
+            }
         }
 
-        packetLogger.log("PARSE", "Frame not recognised as battery (cmd=0x%02X key=0x%02X)".format(frame.cmd, frame.key))
+        packetLogger.log("PARSE", "Frame not recognised as battery (cmd=0x%02X key=0x%02X, crcValid=${frame.crcValid})".format(frame.cmd, frame.key))
     }
 }

@@ -23,15 +23,24 @@ The Android app can already perform the transport-level work directly:
 5. Receive/log raw notifications.
 6. Upload connection/device telemetry to the dashboard.
 
-A focused official-app Bluetooth capture revealed the first useful command/response pair:
+A focused official-app Bluetooth capture (`btsnoop_hci.log`, analysed with `tshark`
+on 2026-06-22) revealed several command/response pairs, all now **watch-verified**
+both from the capture and from a live on-device run of the dashboard app:
 
 ```text
-WRITE 0AF6: 02 01
-NOTIFY 0AF7: 33 DA AD DA AD 01 1D 00 ...
-NOTIFY 0AF7: 02 01 D8 1E 01 01 00 5F 01 00 01 00 5A 02 02 03 06 00
+WRITE 0AF6: 02 04   → NOTIFY 0AF7: 02 04 F4 91 29 51 C6 45 F4 91 29 51 C6 45   (MAC, bytes[2..7])
+WRITE 0AF6: 02 01   → NOTIFY 0AF7: 02 01 D8 1E 01 01 00 5A 01 01 01 00 5A ...   (status; battery=byte[7])
+WRITE 0AF6: 02 A7   → NOTIFY 0AF7: 02 A7 01 01 00 5A 01 D8 1E                    (battery=byte[5])
+                      NOTIFY 0AF7: 33 DA AD DA AD 01 1D 00 ...                   (long binary sync frame)
+                      NOTIFY 0AF7: 07 40 1F 00 ...                              (transport ACK — NOT battery)
 ```
 
-The app currently uses `02 01` as a captured status probe and treats byte 7 of the `02 01 ...` response as a capture-derived battery percentage. This is a useful foothold, but it is not a scalable protocol strategy.
+Battery byte offset is now **confirmed by two independent samples**: the capture
+showed `0x5F` (95%) and the live run showed `0x5A` (90%) at the same offsets — proving
+the offset, not just one lucky sample. `WatchProtocol.kt` parses all three commands
+with watch-verified parsers. The remaining gap is the *long* `33 DA AD` health-sync
+frames and the broader metric set (steps/sleep/HR) — those still need the Stage 2
+instrumentation below.
 
 ## Why the capture-only workflow does not scale
 
@@ -78,20 +87,28 @@ JSON exists at the Java↔native boundary. BLE payloads are binary frames, not J
 
 ### Stage 1 — Stabilize direct BLE transport
 
-Status: mostly done.
+Status: ✅ **DONE and verified on real hardware (2026-06-22).** Run against the
+Kogan Active 4 Pro on a Galaxy S21 (Android 14) over ADB Wi-Fi with VeryFit
+force-stopped — proving the app talks to the watch without VeryFit installed or
+running.
 
 Keep dashboard Android independent and direct-to-watch:
 
-- broad BLE scan with device-name/service matching
-- GATT connect with bond handling
-- MTU negotiation
-- serial CCCD enable for notifiable characteristics only
-- serialized writes to `0AF6`
-- raw event logging and copy-to-clipboard
-- raw hex probe input
-- captured `02 01` status probe retry burst
+- broad BLE scan with device-name/service matching ✅ (+ static-MAC fallback, since
+  this watch advertises with no name)
+- GATT connect with bond handling ✅
+- MTU negotiation ✅ (247)
+- serial CCCD enable for notifiable characteristics only ✅ (AF7 + AF2; AF1 skipped)
+- serialized writes to `0AF6` ✅
+- raw event logging and copy-to-clipboard ✅ (now also mirrored to logcat, tag `WatchBLE`)
+- raw hex probe input ✅
+- post-CCCD probe burst ✅ (now `02 04` MAC → `02 01` status → `02 A7` battery → retry)
 
-This stage proves the app can talk to the watch without VeryFit installed or running.
+**One operational caveat discovered on-device:** the watch is dual-mode, and while
+its Classic BR/EDR link (HID/Handsfree) is up, `connectGatt(TRANSPORT_LE)` returns
+`status=133`. A Bluetooth toggle (`adb shell cmd bluetooth_manager disable`/`enable`)
+clears it. Consider a `status=133` auto-retry in the manager as a future robustness
+improvement.
 
 ### Stage 2 — Instrument VeryFit as a protocol oracle
 

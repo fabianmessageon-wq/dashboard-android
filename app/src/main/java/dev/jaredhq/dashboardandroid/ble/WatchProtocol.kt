@@ -143,9 +143,28 @@ object WatchProtocol {
         return frame
     }
 
-    fun buildBatteryInfoCommand(): ByteArray = buildRequestFrame(DATA_TYPE_BATTERY_INFO)
-    fun buildMacAddressCommand(): ByteArray = buildRequestFrame(DATA_TYPE_MAC_ADDRESS)
-    fun buildDeviceInfoCommand(): ByteArray = buildRequestFrame(DATA_TYPE_BASIC_INFO)
+    /**
+     * Battery/status poll — capture-verified 2-byte command.
+     *
+     * Observed in btsnoop: WRITE 0x0AF6 `02 A7` → NTF 0x0AF7
+     * `02 A7 01 01 00 5F 01 D8 1E`; byte[5]=0x5F=95% battery (watch-verified).
+     */
+    fun buildBatteryInfoCommand(): ByteArray = byteArrayOf(0x02, 0xA7.toByte())
+
+    /**
+     * MAC address request — capture-verified 2-byte command.
+     *
+     * Observed in btsnoop: WRITE 0x0AF6 `02 04` → NTF 0x0AF7
+     * `02 04 F4 91 29 51 C6 45 F4 91 29 51 C6 45`; bytes[2..7]=MAC (watch-verified).
+     */
+    fun buildMacAddressCommand(): ByteArray = byteArrayOf(0x02, 0x04)
+
+    /**
+     * Device info request — capture-observed 2-byte command (not yet decoded).
+     * Observed: WRITE `02 02` → NTF `02 02 FB 0A FF 43 3F ...`.
+     */
+    fun buildDeviceInfoCommand(): ByteArray = byteArrayOf(0x02, 0x02)
+
     fun buildFirmwareStatusCommand(): ByteArray = buildRequestFrame(DATA_TYPE_FIRMWARE_STATUS)
 
     /** Capture-observed VeryFit request that produced real 0x0AF7 data after CCCDs. */
@@ -306,6 +325,37 @@ object WatchProtocol {
             voltage = 0,
             mode = 0,
         )
+    }
+
+    /**
+     * Parse battery level from the capture-verified `02 A7` poll response.
+     *
+     * Observed: `02 A7 01 01 00 5F 01 D8 1E` — byte[5]=0x5F=95%.
+     * Watch-verified from btsnoop of official VeryFit app.
+     */
+    fun parseBatteryInfoFromCapturedBatteryPoll(payload: ByteArray): WatchBatteryInfo? {
+        if (payload.size < 6) return null
+        if (payload[0] != 0x02.toByte() || payload[1] != 0xA7.toByte()) return null
+        val level = payload[5].toInt() and 0xFF
+        if (level !in 0..100) return null
+        return WatchBatteryInfo(
+            level = level,
+            status = WatchBatteryInfo.BATTERY_STATE_NORMAL,
+            voltage = 0,
+            mode = 0,
+        )
+    }
+
+    /**
+     * Parse MAC address from the capture-verified `02 04` response.
+     *
+     * Observed: `02 04 F4 91 29 51 C6 45 F4 91 29 51 C6 45` — bytes[2..7] = MAC.
+     * Watch-verified from btsnoop of official VeryFit app.
+     */
+    fun parseMacAddressFromCapturedMacResponse(payload: ByteArray): String? {
+        if (payload.size < 8) return null
+        if (payload[0] != 0x02.toByte() || payload[1] != 0x04.toByte()) return null
+        return (2..7).joinToString(":") { "%02X".format(payload[it].toInt() and 0xFF) }
     }
 
     /**
