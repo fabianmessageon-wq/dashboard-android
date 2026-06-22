@@ -115,7 +115,7 @@ V3 health data type IDs (native):
   structured frame breakdown per notification to drive the confirming capture
 - Display connection status and telemetry in new "Watch" tab
 
-**Files:** See `docs/plans/ble-phase-1-probe.md` for detailed architecture.
+**Files:** See `docs/plans/ble-phase-1-probe.md` for detailed architecture. See `docs/plans/ble-protocol-reverse-engineering-plan.md` for the scalable VeryFit-as-oracle plan; avoid expanding the one-capture/one-parser workflow for every metric.
 
 **Verification:**
 1. `./gradlew testDebugUnitTest`
