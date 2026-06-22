@@ -6,18 +6,15 @@ Use this as the working `CLAUDE.md` guidance for Claude Code sessions on the And
 
 ## Project context
 
-- Dashboard Android worktree: `/home/apolytus/workspace/worktrees/phone-integration-refinement/dashboard-android/`
-- Main dashboard repo: `/home/apolytus/workspace/dashboard` — do not edit directly for implementation work.
-- VeryFit APK artifact: `/home/apolytus/workspace/veryfit-3-4-0.apk`
+- Dashboard Android worktree: `C:\Users\davo\Documents\Claude\BLE-phone-integration\dashboard-android`
+- Main dashboard repo: `C:\Users\davo\Documents\Claude\BLE-phone-integration\dashboard` 
+- VeryFit APK artifact: `C:\Users\davo\Downloads\veryfit-3-4-0.apk` - refer to this for implementation, this already has a working Active 4 Pro BLE data collection system
 - VeryFit package/version researched: `com.watch.life` v3.4.0.
 - Target watch: Kogan Active 4 Pro / IDO-style VeryFit protocol family.
 - Research direction: independent clean-room Kotlin Android implementation, using VeryFit/APK/captures as protocol documentation, not as a runtime dependency unless Fabian explicitly accepts that tradeoff.
 
 ## Non-negotiable safety rules
 
-- Do not commit or push unless Fabian explicitly requests it.
-- Do not modify production dashboard app behavior during BLE tracing spikes.
-- Do not edit the main dashboard checkout directly; use the active Android worktree.
 - Do not upload contacts, GPS tracks, raw private health payloads, or full BLE dumps to model-facing systems by default.
 - Treat raw BLE logs as developer-only and short-retention unless Fabian says otherwise.
 - Do not assume a metric is supported just because the VeryFit APK has a model class. Label confidence as:
