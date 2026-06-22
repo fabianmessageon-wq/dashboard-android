@@ -137,6 +137,25 @@ adb shell monkey -p dev.jaredhq.dashboardandroid 1
 
 Use the real package name from the manifest if it differs from `dev.jaredhq.dashboardandroid`.
 
+### Fresh APK deployment rule
+
+Before Claude claims that it tested behavior on Fabian's phone, Claude must deploy the current code to the phone through Android Studio/Gradle/ADB. The already-installed APK does not update automatically when code changes.
+
+Acceptable fresh-deploy paths:
+
+- Android Studio: use Run/Debug with the connected physical phone selected. This rebuilds and deploys the current variant before launch.
+- Gradle/ADB from the Android project root:
+
+```bash
+./gradlew installDebug
+adb shell am force-stop dev.jaredhq.dashboardandroid
+adb shell monkey -p dev.jaredhq.dashboardandroid 1
+```
+
+If `installDebug` is unavailable or module-specific tasks are required, use the narrowest equivalent install task, for example `./gradlew :app:installDebug`, and record the exact task used.
+
+Do not test BLE/app behavior against a stale APK. In every handoff that mentions phone testing, include the deploy command or Android Studio Run/Debug action used, the result, and the package/version actually launched.
+
 Logcat workflow:
 
 ```bash
