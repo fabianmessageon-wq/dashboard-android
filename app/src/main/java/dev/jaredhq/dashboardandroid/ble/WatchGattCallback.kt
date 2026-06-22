@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.os.Build
 
 /**
@@ -57,6 +58,7 @@ class WatchGattCallback(
                     onStateChange(WatchConnectionState.Connecting(gatt.device?.address ?: "unknown"))
                     // Request MTU 517 (max); watch typically negotiates to 247
                     try {
+                        packetLogger.log("GATT", "requestMtu(517) start")
                         gatt.requestMtu(517)
                     } catch (e: SecurityException) {
                         packetLogger.log("GATT", "SecurityException requesting MTU: ${e.message}")
@@ -226,8 +228,7 @@ class WatchGattCallback(
             else packetLogger.log("GATT", "CCCD write failed for ${descriptor.characteristic.uuid}; continuing notification chain")
 
             // Chain to the next serialized op now that the previous one completed.
-            nextNotifiableAfter(descriptor.characteristic)?.let { enableNotification(gatt, it) }
-                ?: onNotificationsEnabled?.invoke()
+            chainAfter(gatt, descriptor.characteristic)
         }
     }
 
@@ -235,29 +236,57 @@ class WatchGattCallback(
         try {
             val success = gatt.setCharacteristicNotification(characteristic, true)
             packetLogger.log("GATT", "setCharacteristicNotification ${characteristic.uuid} success=$success")
-            if (!success) return
+            // Do NOT stall the chain if local enablement fails — log it and move on so a
+            // single bad characteristic never blocks the remaining notify setup.
+            if (!success) {
+                packetLogger.log("GATT", "setCharacteristicNotification failed for ${characteristic.uuid}; continuing notification chain")
+                return chainAfter(gatt, characteristic)
+            }
 
             val descriptor = characteristic.getDescriptor(WatchBleManager.CCCD_UUID)
-            if (descriptor != null) {
-                val cccdValue = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    gatt.writeDescriptor(descriptor, cccdValue)
-                } else {
-                    @Suppress("DEPRECATION")
-                    descriptor.value = cccdValue
-                    gatt.writeDescriptor(descriptor)
-                }
-                packetLogger.log("GATT", "Writing CCCD ENABLE_NOTIFICATION to ${characteristic.uuid}")
+            if (descriptor == null) {
+                packetLogger.log("GATT", "No CCCD descriptor on ${characteristic.uuid}; continuing notification chain")
+                return chainAfter(gatt, characteristic)
+            }
+
+            // Honour the characteristic's own properties: an indicate-only characteristic
+            // must be enabled with ENABLE_INDICATION_VALUE, not the notification value, or
+            // the watch never sends data on it.
+            val indicate = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0 &&
+                characteristic.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY == 0
+            val cccdValue = if (indicate) {
+                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
             } else {
-                packetLogger.log("GATT", "No CCCD descriptor on ${characteristic.uuid}")
-                nextNotifiableAfter(characteristic)?.let { enableNotification(gatt, it) }
-                    ?: onNotificationsEnabled?.invoke()
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            }
+            val mode = if (indicate) "INDICATION" else "NOTIFICATION"
+            packetLogger.log("GATT", "Writing CCCD ENABLE_$mode to ${characteristic.uuid} start")
+
+            val dispatched = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // The API 33 overload returns a BluetoothStatusCodes value, not a GATT status.
+                gatt.writeDescriptor(descriptor, cccdValue) == BluetoothStatusCodes.SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                descriptor.value = cccdValue
+                @Suppress("DEPRECATION")
+                gatt.writeDescriptor(descriptor)
+            }
+            // If the write didn't even dispatch, onDescriptorWrite will never fire — chain
+            // now so the setup can't hang waiting on a callback that isn't coming.
+            if (!dispatched) {
+                packetLogger.log("GATT", "writeDescriptor did not dispatch for ${characteristic.uuid}; continuing notification chain")
+                chainAfter(gatt, characteristic)
             }
         } catch (e: SecurityException) {
             packetLogger.log("GATT", "SecurityException enabling notification: ${e.message}")
-            nextNotifiableAfter(characteristic)?.let { enableNotification(gatt, it) }
-                ?: onNotificationsEnabled?.invoke()
+            chainAfter(gatt, characteristic)
         }
+    }
+
+    /** Advance the serialized notify-setup chain, or signal completion when none remain. */
+    private fun chainAfter(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        nextNotifiableAfter(characteristic)?.let { enableNotification(gatt, it) }
+            ?: onNotificationsEnabled?.invoke()
     }
 
     /**

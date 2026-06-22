@@ -207,10 +207,12 @@ private fun WatchContent(
             }
         }
 
-        // Command buttons (only when connected)
+        // Command buttons (only when connected). Writes are disabled until the watch is
+        // ready (notification setup complete) so a tap can't race the CCCD chain.
         if (state.state is WatchConnectionState.Connected) {
+            val ready = (state.state as WatchConnectionState.Connected).ready
             Text(
-                text = "Commands",
+                text = if (ready) "Commands" else "Commands (waiting for notification setup…)",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -218,19 +220,20 @@ private fun WatchContent(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(onClick = onMacRequest, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onMacRequest, enabled = ready, modifier = Modifier.weight(1f)) {
                     Text("MAC (301)")
                 }
-                OutlinedButton(onClick = onDeviceInfoRequest, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onDeviceInfoRequest, enabled = ready, modifier = Modifier.weight(1f)) {
                     Text("Info (300)")
                 }
-                OutlinedButton(onClick = onBatteryInfoRequest, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onBatteryInfoRequest, enabled = ready, modifier = Modifier.weight(1f)) {
                     Text("Battery (321)")
                 }
             }
 
             OutlinedButton(
                 onClick = onCapturedStatusProbe,
+                enabled = ready,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Captured Probe (02:01)")
@@ -245,7 +248,7 @@ private fun WatchContent(
             )
             OutlinedButton(
                 onClick = onRawCommandSend,
-                enabled = state.rawCommandHex.isNotBlank(),
+                enabled = ready && state.rawCommandHex.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Send Raw Hex")
@@ -344,9 +347,16 @@ private fun ConnectionStatusCard(state: WatchConnectionState) {
                     Text("Connecting to ${state.deviceAddress}…", style = MaterialTheme.typography.titleMedium)
                 }
                 is WatchConnectionState.Connected -> {
-                    Icon(Icons.Filled.Bluetooth, contentDescription = null)
+                    if (state.ready) {
+                        Icon(Icons.Filled.Bluetooth, contentDescription = null)
+                    } else {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
                     Column {
-                        Text("Connected", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (state.ready) "Connected" else "Initialising…",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                         Text(
                             state.deviceName ?: state.deviceAddress,
                             style = MaterialTheme.typography.bodySmall,
@@ -439,6 +449,7 @@ private fun PreviewConnected() {
                 state = WatchConnectionState.Connected(
                     deviceAddress = "AA:BB:CC:DD:EE:FF",
                     deviceName = "Kogan Active 4 Pro",
+                    ready = true,
                     batteryInfo = WatchBatteryInfo(level = 78, status = 0, voltage = 4200, mode = 0),
                     mtu = 247,
                     macAddress = "AA:BB:CC:DD:EE:FF",

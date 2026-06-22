@@ -178,6 +178,35 @@ class WatchProtocolTest {
     }
 
     @Test
+    fun parseMacAddressFromCapturedMacResponse_rejectsAllZeroAndAllFf() {
+        val zeros = byteArrayOf(0x02, 0x04, 0, 0, 0, 0, 0, 0)
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(zeros))
+        val ffs = byteArrayOf(
+            0x02, 0x04,
+            0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+        )
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(ffs))
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_rejectsMismatchedDuplicate() {
+        // 14-byte response whose two echoed MAC copies disagree → corrupt, must be dropped.
+        val response = byteArrayOf(
+            0x02, 0x04,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x46, // last byte differs
+        )
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(response))
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_acceptsSingleCopyEightBytes() {
+        // Only one MAC copy present (no duplicate to cross-check) — still valid.
+        val response = byteArrayOf(0x02, 0x04, 0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45)
+        assertEquals("F4:91:29:51:C6:45", WatchProtocol.parseMacAddressFromCapturedMacResponse(response))
+    }
+
+    @Test
     fun buildMacAddressCommand_isCaptureVerified() {
         assertArrayEquals(byteArrayOf(0x02, 0x04), WatchProtocol.buildMacAddressCommand())
     }

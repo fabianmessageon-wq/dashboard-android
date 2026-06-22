@@ -355,7 +355,17 @@ object WatchProtocol {
     fun parseMacAddressFromCapturedMacResponse(payload: ByteArray): String? {
         if (payload.size < 8) return null
         if (payload[0] != 0x02.toByte() || payload[1] != 0x04.toByte()) return null
-        return (2..7).joinToString(":") { "%02X".format(payload[it].toInt() and 0xFF) }
+        val mac = payload.copyOfRange(2, 8)
+        // Reject obviously-invalid identities so a malformed or empty response is never
+        // surfaced as the watch's MAC (all-zero or all-0xFF are the common bad-frame fills).
+        if (mac.all { it == 0x00.toByte() } || mac.all { it == 0xFF.toByte() }) return null
+        // The watch echoes the MAC twice (bytes[2..7] and bytes[8..13]). When both copies
+        // are present they must agree, otherwise the frame is corrupt and we drop it.
+        if (payload.size >= 14) {
+            val second = payload.copyOfRange(8, 14)
+            if (!mac.contentEquals(second)) return null
+        }
+        return mac.joinToString(":") { "%02X".format(it.toInt() and 0xFF) }
     }
 
     /**

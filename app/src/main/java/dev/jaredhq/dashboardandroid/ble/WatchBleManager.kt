@@ -14,6 +14,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -267,10 +268,17 @@ class WatchBleManager(private val context: Context) {
                 if (!writeInProgress && pendingCommands.isEmpty()) onConnectionEvent?.invoke()
             },
             onNotificationsEnabled = {
+                // Notification setup is complete — only now is the link safe to write to.
+                // Flip Connected.ready so writeCommand() (and the UI) can distinguish the
+                // initialising window from a watch that's actually ready for commands.
+                _state.update { current ->
+                    if (current is WatchConnectionState.Connected) current.copy(ready = true)
+                    else current
+                }
                 // Official-app btsnoop showed the first useful post-CCCD probe is the
                 // short 0x02 0x01 request; the previous guessed AB frames only yielded
                 // ACKs. Keep legacy buttons manual, but auto-probe with captured bytes.
-                packetLogger.log("BLE", "Notifications enabled, queueing captured 02:01 status probe burst")
+                packetLogger.log("BLE", "Notifications enabled (ready), queueing captured 02:01 status probe burst")
                 requestCapturedStatusProbeBurst()
             },
         )
@@ -303,7 +311,14 @@ class WatchBleManager(private val context: Context) {
      * (0x0AF6). Frames are built by [WatchProtocol]; this method is transport-only.
      */
     fun writeCommand(command: ByteArray): Boolean {
-        if (_state.value !is WatchConnectionState.Connected) return false
+        val connected = _state.value as? WatchConnectionState.Connected ?: return false
+        // Gate on readiness: writing during the connected-but-initialising window would
+        // race the serialized CCCD descriptor-write chain and silently fail (Android GATT
+        // has no internal queue). Reject explicitly with a log rather than corrupt setup.
+        if (!connected.ready) {
+            packetLogger.log("GATT", "Ignoring write before ready (notification setup still in progress): ${command.toHex()}")
+            return false
+        }
         if (bluetoothGatt == null || gattCallback?.writeCharacteristic == null) return false
         pendingCommands.addLast(command)
         drainCommandQueue()
@@ -485,7 +500,10 @@ class WatchBleManager(private val context: Context) {
         lastDeviceAddress = lastDeviceAddress,
         lastDeviceName = lastDeviceName,
         lastMacAddress = lastMacAddress,
-        rawEvents = packetLogger.getRawEvents(),
+        // Raw TX/RX packet hex is developer-only diagnostic data. Per the project's
+        // privacy rules, only include it in debug builds; release syncs carry the
+        // connection metadata (device id, battery, mtu, state) without raw payloads.
+        rawEvents = if (BuildConfig.DEBUG) packetLogger.getRawEvents() else emptyList(),
     )
 
     internal fun closeGatt() {
@@ -535,9 +553,13 @@ private fun ScanResult.matchesTargetWatch(): Boolean {
     val advertisedServices = scanRecord?.serviceUuids.orEmpty().map { it.uuid }
     if (WatchBleManager.VERYFIT_SERVICE_UUID in advertisedServices) return true
 
-    // Fallback: match by the btsnoop-verified static BLE address.
-    val address = try { device?.address } catch (_: SecurityException) { null }
-    if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
+    // Debug-only fallback: match by the btsnoop-verified static BLE address. This is one
+    // specific developer's watch hard-coded for bring-up; release builds must rely on the
+    // advertised service UUID / name so the app doesn't silently target a fixed device.
+    if (BuildConfig.DEBUG) {
+        val address = try { device?.address } catch (_: SecurityException) { null }
+        if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
+    }
 
     val name = scanRecord?.deviceName ?: try {
         device?.name
