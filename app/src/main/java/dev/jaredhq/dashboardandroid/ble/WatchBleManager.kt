@@ -48,8 +48,17 @@ class WatchBleManager(private val context: Context) {
     private var gattCallback: WatchGattCallback? = null
     private var isScanning = false
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // The command queue is touched from two threads: the UI/main thread (button taps,
+    // probe-burst Handler callbacks) and the GATT binder thread (onCharacteristicWrite →
+    // drain). [pendingCommands] and [writeInProgress] are therefore only ever read/written
+    // while holding [commandLock]; the actual gatt.writeCharacteristic dispatch happens
+    // outside the lock so a framework call never blocks the other thread. Without this,
+    // two threads could both observe writeInProgress=false and dispatch overlapping writes,
+    // which Android GATT silently drops (it has no internal op queue).
+    private val commandLock = Any()
     private val pendingCommands = ArrayDeque<ByteArray>()
-    private var writeInProgress = false
+    private var writeInProgress = false // guarded by commandLock
 
     /** Epoch millis the current connection became [WatchConnectionState.Connected], or null. */
     @Volatile
@@ -198,8 +207,10 @@ class WatchBleManager(private val context: Context) {
      */
     fun connect(device: BluetoothDevice) {
         stopScan()
-        pendingCommands.clear()
-        writeInProgress = false
+        synchronized(commandLock) {
+            pendingCommands.clear()
+            writeInProgress = false
+        }
         // A fresh connection attempt: clear the previous session's connect time so
         // the eventual Connected state stamps a new window.
         connectedAtMillis = null
@@ -262,11 +273,7 @@ class WatchBleManager(private val context: Context) {
                 // to include them, so coalesce another one-off upload here.
                 onConnectionEvent?.invoke()
             },
-            onCommandWriteComplete = {
-                writeInProgress = false
-                drainCommandQueue()
-                if (!writeInProgress && pendingCommands.isEmpty()) onConnectionEvent?.invoke()
-            },
+            onCommandWriteComplete = { onWriteCompleted() },
             onNotificationsEnabled = {
                 // Notification setup is complete — only now is the link safe to write to.
                 // Flip Connected.ready so writeCommand() (and the UI) can distinguish the
@@ -320,17 +327,39 @@ class WatchBleManager(private val context: Context) {
             return false
         }
         if (bluetoothGatt == null || gattCallback?.writeCharacteristic == null) return false
-        pendingCommands.addLast(command)
+        synchronized(commandLock) { pendingCommands.addLast(command) }
         drainCommandQueue()
         return true
     }
 
+    /**
+     * A write completed on the GATT binder thread: clear the in-flight flag, dispatch the
+     * next queued command, and — only when the queue has fully drained — coalesce a
+     * telemetry sync. All queue-state reads happen under [commandLock].
+     */
+    private fun onWriteCompleted() {
+        synchronized(commandLock) { writeInProgress = false }
+        drainCommandQueue()
+        val idle = synchronized(commandLock) { !writeInProgress && pendingCommands.isEmpty() }
+        if (idle) onConnectionEvent?.invoke()
+    }
+
     private fun drainCommandQueue() {
-        if (writeInProgress) return
-        val command = pendingCommands.removeFirstOrNull() ?: return
-        val gatt = bluetoothGatt ?: return
-        val callback = gattCallback ?: return
-        val characteristic = callback.writeCharacteristic ?: return
+        // Atomically claim the in-flight slot and pull the next command so the UI thread
+        // and the binder thread can't both dispatch at once. The framework write itself
+        // runs after the lock is released.
+        val command: ByteArray
+        val gatt: BluetoothGatt
+        val characteristic: BluetoothGattCharacteristic
+        synchronized(commandLock) {
+            if (writeInProgress) return
+            val g = bluetoothGatt ?: return
+            val ch = gattCallback?.writeCharacteristic ?: return
+            command = pendingCommands.removeFirstOrNull() ?: return
+            gatt = g
+            characteristic = ch
+            writeInProgress = true
+        }
 
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_TX, characteristic.uuid.toString(), command)
         _state.update { current ->
@@ -338,33 +367,36 @@ class WatchBleManager(private val context: Context) {
             else current
         }
 
-        writeInProgress = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
                 val status = gatt.writeCharacteristic(characteristic, command, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    writeInProgress = false
                     packetLogger.log("GATT", "writeCharacteristic failed immediately status=$status")
-                    drainCommandQueue()
+                    failCurrentWriteAndDrain()
                 }
             } catch (e: SecurityException) {
-                writeInProgress = false
                 packetLogger.log("GATT", "SecurityException writing characteristic: ${e.message}")
+                synchronized(commandLock) { writeInProgress = false }
             }
         } else {
             @Suppress("DEPRECATION")
             characteristic.value = command
             try {
                 if (!gatt.writeCharacteristic(characteristic)) {
-                    writeInProgress = false
                     packetLogger.log("GATT", "writeCharacteristic returned false")
-                    drainCommandQueue()
+                    failCurrentWriteAndDrain()
                 }
             } catch (e: SecurityException) {
-                writeInProgress = false
                 packetLogger.log("GATT", "SecurityException writing characteristic: ${e.message}")
+                synchronized(commandLock) { writeInProgress = false }
             }
         }
+    }
+
+    /** A dispatch failed before any callback will fire: release the slot and try the next. */
+    private fun failCurrentWriteAndDrain() {
+        synchronized(commandLock) { writeInProgress = false }
+        drainCommandQueue()
     }
 
     /**
