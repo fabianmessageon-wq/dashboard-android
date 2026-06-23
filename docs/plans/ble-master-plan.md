@@ -2,7 +2,79 @@
 
 ## Goal
 
-Build an independent Android-dashboard bridge for the Kogan Active 4 Pro smartwatch, avoiding VeryFit/vendor/cloud/third-party health platforms. The watch data flows: Active 4 Pro → dashboard-android app → self-hosted dashboard API.
+Build an independent Android-dashboard bridge for Fabian's Kogan Active 4 Pro smartwatch, avoiding VeryFit/vendor/cloud/third-party health platforms for the private build. The watch data flows: Active 4 Pro → dashboard-android app → Fabian's self-hosted dashboard API.
+
+## Product direction — Fabian-private build first
+
+This plan now prioritizes Fabian's private/personal dashboard before any monetized or general-user product. Optimize for Fabian's watch, phone, dashboard, and private AI/Jared reasoning. Do not slow the current implementation down with commercial onboarding, generic smartwatch certification, app-store polish, enterprise health-compliance scaffolding, or broad multi-device abstractions unless they directly help Fabian's own watch work reliably.
+
+A monetized product track is deferred. If it happens later, it should be treated as a separate fork/decision: standard health integrations such as Google Health/Health Connect/iHealth for general users, or a supported-compatible-smartwatch/direct-sync model. The current branch should stay small, practical, and privacy-first.
+
+## Current private-build status (after `ble-stability-ready-lifecycle`)
+
+The `ble-stability-ready-lifecycle` work has been merged to `origin/main` and brought into `phone-integration-refinement`. Current developed state:
+
+- `WatchConnectionState.Connected.ready` distinguishes GATT-connected from safe-to-write-ready.
+- `WatchBleManager.writeCommand()` rejects writes until notification setup is complete.
+- `WatchBleManager` serializes GATT writes with `commandLock`, `pendingCommands`, and `writeInProgress`.
+- `WatchGattCallback` chains notification/indication setup, handles missing CCCDs without hanging, and uses indication CCCD values for indicate-only characteristics.
+- `0x0AF8` is read before notification setup when readable.
+- `02 01` basic-info parsing now has `WatchBasicInfo`, including `device_id` little-endian parsing and `firmware_version` at offset 4.
+- Basic-info `firmware_version == 1` is deliberately decoupled from activity payload version `16`.
+- Activity version helpers exist, but `33 DA AD` activity reassembly/decoding is not implemented yet.
+
+The old broad phases below remain useful as reference, but the immediate execution order is the Fabian-private phase list in the next section.
+
+## Fabian-private implementation phases
+
+### Private Phase 1 — real-phone ready-lifecycle validation
+
+Validate the current branch on Fabian's real phone/watch before stacking more protocol work:
+
+- fresh APK deploy via Android Studio/Gradle/ADB,
+- force-stop VeryFit,
+- scan/connect/service discovery/MTU,
+- `0x0AF8` read when present,
+- serial notification/indication setup,
+- transition to `ready=true`,
+- automatic `02 01` probe,
+- parsed `WatchBasicInfo` and battery visible/logged.
+
+Acceptance: Fabian's watch reaches `ready=true`, `02 01` parses from real watch data, no early-write/GATT race symptoms appear, and logs are copyable enough for iteration.
+
+### Private Phase 2 — personal activity buffer capture
+
+Implement only `33 DA AD` activity chunk reassembly:
+
+- detect `0x33` notification chunks,
+- detect preamble `DA AD DA AD` at bytes 1..4,
+- read little-endian length from bytes 6..7,
+- append bytes from offset 1 onward,
+- detect complete buffers,
+- log `activityVersion()` / `describeActivityVersion()`,
+- keep unsupported versions non-fatal.
+
+Do not decode full fields or generate TCX yet.
+
+### Private Phase 3 — personal activity summary decode
+
+Decode only summary fields needed for Fabian's private timeline: start time, type, duration, steps, distance, calories, and heart-rate summary when present. Use reference simulator bytes and fresh watch captures as tests. Keep confidence labels with each decoded field.
+
+### Private Phase 4 — private dashboard timeline
+
+Sync/display useful personal watch trends: device profile, battery history, connection/last-seen, activity summaries, daily/weekly trend cards, manual refresh/sync, last-updated, and confidence indicators.
+
+### Private Phase 5 — Jared/AI health-pattern layer
+
+Let Jared reason over Fabian's private health/activity trends once the data is trustworthy. Keep output in wellness/pattern-support territory, not diagnosis or medical advice.
+
+### Private Phase 6 — optional metric expansion for Fabian only
+
+Only after the activity loop is useful, consider sleep, SpO2, stress/pressure, HRV, respiratory rate, temperature, and GPS/path data. Each metric still needs capture-observed or watch-verified evidence before normal UI/AI use.
+
+### Private Phase 7 — product fork decision later
+
+After the private build proves value, decide separately whether monetization means standard health-platform integrations, a compatible-smartwatch bundle/direct-sync model, or a split between private Jared HQ and public dashboard product.
 
 > ## ✅ Evidence update (2026-06-22) — supersedes the 2026-06-21 correction below
 >

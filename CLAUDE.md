@@ -231,6 +231,20 @@ VeryFit APK research found:
 
 Important implication: VeryFit is not simply writing JSON directly to BLE. Java-facing JSON/model callbacks often sit at the app/native boundary; the BLE wire protocol remains binary until proven by capture.
 
+## Product direction — Fabian-private build first
+
+This watch integration is currently for Fabian's private dashboard, not the monetized/general-user product. Optimize for Fabian's Active 4 Pro, Fabian's phone, and private dashboard sync before commercial polish.
+
+Current priority:
+
+- reliable direct BLE for Fabian's watch
+- useful private trend data over time
+- clear debug logs and copyable evidence
+- privacy-conscious sync into Fabian's own dashboard
+- Jared/AI pattern support once the data is trustworthy enough
+
+Do not overbuild this phase for broad smartwatch compatibility, consumer onboarding, app-store polish, enterprise health compliance scaffolding, or generic monetized-product abstractions. If monetization happens later, treat it as a separate product fork: standard health integrations or a supported-compatible-smartwatch model.
+
 ## BLE implementation strategy
 
 ### Reference-guided backend rule
