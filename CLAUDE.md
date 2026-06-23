@@ -231,7 +231,52 @@ VeryFit APK research found:
 
 Important implication: VeryFit is not simply writing JSON directly to BLE. Java-facing JSON/model callbacks often sit at the app/native boundary; the BLE wire protocol remains binary until proven by capture.
 
+## Product direction — Fabian-private build first
+
+This watch integration is currently for Fabian's private dashboard, not the monetized/general-user product. Optimize for Fabian's Active 4 Pro, Fabian's phone, and private dashboard sync before commercial polish.
+
+Current priority:
+
+- reliable direct BLE for Fabian's watch
+- useful private trend data over time
+- clear debug logs and copyable evidence
+- privacy-conscious sync into Fabian's own dashboard
+- Jared/AI pattern support once the data is trustworthy enough
+
+Do not overbuild this phase for broad smartwatch compatibility, consumer onboarding, app-store polish, enterprise health compliance scaffolding, or generic monetized-product abstractions. If monetization happens later, treat it as a separate product fork: standard health integrations or a supported-compatible-smartwatch model.
+
 ## BLE implementation strategy
+
+### Reference-guided backend rule
+
+The project direction is **not** to copy proprietary backend source code from VeryFit or other APKs into this repository. Reference apps may be inspected as architecture/protocol documentation only.
+
+Allowed:
+
+- Use APK/reference-app findings to understand proven BLE/GATT sequencing, UUIDs, native/API-boundary behavior, permissions, and failure handling.
+- Reimplement those ideas cleanly in this app with our own source code.
+- Keep the frontend in Kotlin/Jetpack Compose with ViewModel-driven state.
+- Refactor the BLE backend toward a simple Java-style state machine and serialized GATT operation queue if that improves reliability, regardless of whether the source file is Kotlin or Java.
+- Use Java/Kotlin interop if there is a clear maintainability reason, but do not switch languages just because a reference app used Java.
+
+Not allowed unless Fabian explicitly approves the legal/maintenance tradeoff:
+
+- Copy/paste decompiled proprietary Java/Kotlin source into the repo.
+- Treat VeryFit native libraries or obfuscated backend code as runtime dependencies.
+- Commit copied APK internals, secrets, private payload dumps, or black-box code that cannot be explained and maintained.
+
+Stability comes from BLE architecture, not from Java itself. Prioritize:
+
+- broad scan fallback before service-specific filtering assumptions
+- one serialized GATT operation queue
+- explicit connection states such as `Disconnected`, `Scanning`, `Connecting`, `DiscoveringServices`, `InitializingGatt`, `NotificationsEnabling`, `Ready`, and `Error`
+- no app/debug writes until state is `Ready`
+- request MTU before protocol setup when appropriate
+- read/setup steps such as `0x0AF8` before notify/write if the watch/reference sequence requires it
+- serial notification/indication setup for `0x0AF7`, `0x0AF2`, and `0x0AF1` when present and notify/indicate-capable
+- correct CCCD value: notification vs indication
+- clear logging of every read/write/descriptor return value and callback status
+- privacy-conscious raw packet logging that is debug-gated/redacted before broad health/activity sync
 
 First milestone is infrastructure, not full health decoding:
 
