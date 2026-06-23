@@ -170,6 +170,25 @@ object WatchProtocol {
     /** Capture-observed VeryFit request that produced real 0x0AF7 data after CCCDs. */
     fun buildCapturedStatusProbeCommand(): ByteArray = byteArrayOf(0x02, 0x01)
 
+    /**
+     * Activity-buffer sync request — **reference-documented, UNVERIFIED on this watch.**
+     *
+     * From the IDO/VeryFit/Ryze Web-Bluetooth reference downloader, this is the write
+     * that makes the watch stream its `33 DA AD` activity buffer back on `0x0AF7`:
+     * `33 DA AD DA AD 01 10 00 04 00 0B 01 00 04 00 00 00 00 00`. The trailing
+     * sequence/cmd bytes are reference-observed and may vary until a capture confirms
+     * them; the reference shows a variant with `16 00 00 04` in place of `0B 01 00 04`.
+     *
+     * ⚠ Side effect: sending and completing a sync MAY cause the watch to mark the
+     * activity as synced. This must stay a deliberate, manual-only action — never wire
+     * it into the automatic post-CCCD probe burst.
+     */
+    fun buildActivitySyncRequest(): ByteArray = byteArrayOf(
+        0x33, 0xDA.toByte(), 0xAD.toByte(), 0xDA.toByte(), 0xAD.toByte(),
+        0x01, 0x10, 0x00, 0x04, 0x00, 0x0B, 0x01, 0x00, 0x04,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    )
+
     /** Parse tester-entered hex such as `AB 01 41 01 00 00 00 C3 F7` into bytes. */
     fun parseHexCommand(input: String): ByteArray? {
         val cleaned = input

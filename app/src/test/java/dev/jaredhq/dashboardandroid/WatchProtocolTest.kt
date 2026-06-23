@@ -126,6 +126,22 @@ class WatchProtocolTest {
     }
 
     @Test
+    fun buildActivitySyncRequest_matchesReferenceDownloaderBytes() {
+        // Reference IDO/VeryFit/Ryze activity-sync request (UNVERIFIED on this watch).
+        assertArrayEquals(
+            byteArrayOf(
+                0x33, 0xDA.toByte(), 0xAD.toByte(), 0xDA.toByte(), 0xAD.toByte(),
+                0x01, 0x10, 0x00, 0x04, 0x00, 0x0B, 0x01, 0x00, 0x04,
+                0x00, 0x00, 0x00, 0x00, 0x00,
+            ),
+            WatchProtocol.buildActivitySyncRequest(),
+        )
+        // The request itself begins with the same 33 DA AD DA AD preamble the
+        // reassembler keys on, so a loopback/echo would be recognised as a frame start.
+        assertTrue(WatchProtocol.looksLikeCapturedDaAdFrame(WatchProtocol.buildActivitySyncRequest()))
+    }
+
+    @Test
     fun parseBatteryInfoFromCapturedStatus_readsObservedBatteryByte() {
         val response = byteArrayOf(
             0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x01, 0x00, 0x5F,

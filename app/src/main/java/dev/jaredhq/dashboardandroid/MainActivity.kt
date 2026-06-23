@@ -236,6 +236,7 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onDeviceInfoRequest = vm::requestDeviceInfo,
                     onBatteryInfoRequest = vm::requestBatteryInfo,
                     onCapturedStatusProbe = vm::requestCapturedStatusProbe,
+                    onActivitySyncRequest = vm::requestActivitySync,
                     onRawCommandChange = vm::onRawCommandHexChange,
                     onRawCommandSend = vm::sendRawCommand,
                     onSyncClick = {

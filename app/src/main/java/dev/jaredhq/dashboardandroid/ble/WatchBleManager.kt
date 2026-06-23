@@ -445,6 +445,20 @@ class WatchBleManager(private val context: Context) {
     }
 
     /**
+     * Send the reference-documented activity-sync request (UNVERIFIED) to elicit the
+     * watch's `33 DA AD` activity buffer, which [WatchGattCallback]'s reassembler then
+     * stitches back together (Phase 2 — version logging only, no field decode).
+     *
+     * Manual-only by design: completing a sync MAY cause the watch to mark activity as
+     * synced, so this is never fired automatically. See [WatchProtocol.buildActivitySyncRequest].
+     */
+    fun requestActivitySync() {
+        val cmd = WatchProtocol.buildActivitySyncRequest()
+        packetLogger.log("TX", "ACTIVITY_SYNC req (33 DA AD, UNVERIFIED — may mark synced): ${cmd.toHex()}")
+        writeCommand(cmd)
+    }
+
+    /**
      * Post-CCCD probe sequence using capture-verified commands. Fires immediately
      * and then retries the status probe twice, matching the pattern observed in the
      * official-app btsnoop (MAC → device info → status probe, spaced out).
@@ -582,16 +596,19 @@ class WatchBleManager(private val context: Context) {
 }
 
 private fun ScanResult.matchesTargetWatch(): Boolean {
+    // Debug bring-up: when a known watch MAC is pinned, target ONLY that device and never
+    // fall back to service/name matching. There can be more than one identical Active 4 Pro
+    // in range (e.g. a neighbour's — observed sharing the same model deviceId and advertised
+    // service/name), and matching those would connect to the wrong watch and risk pulling a
+    // stranger's private health data. The pinned static MAC is authoritative for this build.
+    // Release builds skip this and rely on the advertised service UUID / name below.
+    if (BuildConfig.DEBUG && WatchBleManager.KNOWN_WATCH_MAC.isNotBlank()) {
+        val address = try { device?.address } catch (_: SecurityException) { null }
+        return address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true
+    }
+
     val advertisedServices = scanRecord?.serviceUuids.orEmpty().map { it.uuid }
     if (WatchBleManager.VERYFIT_SERVICE_UUID in advertisedServices) return true
-
-    // Debug-only fallback: match by the btsnoop-verified static BLE address. This is one
-    // specific developer's watch hard-coded for bring-up; release builds must rely on the
-    // advertised service UUID / name so the app doesn't silently target a fixed device.
-    if (BuildConfig.DEBUG) {
-        val address = try { device?.address } catch (_: SecurityException) { null }
-        if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
-    }
 
     val name = scanRecord?.deviceName ?: try {
         device?.name
