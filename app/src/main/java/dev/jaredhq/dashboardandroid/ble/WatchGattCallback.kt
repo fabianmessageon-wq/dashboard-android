@@ -65,13 +65,29 @@ class WatchGattCallback(
                     }
                 } else {
                     onStateChange(WatchConnectionState.Error("Connection failed: status=$status"))
-                    gatt.close()
+                    closeQuietly(gatt)
                 }
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
                 onStateChange(WatchConnectionState.Disconnected)
-                gatt.close()
+                closeQuietly(gatt)
             }
+        }
+    }
+
+    /**
+     * Close the GATT client, tolerating a revoked BLUETOOTH_CONNECT permission.
+     * [BluetoothGatt.close] requires BLUETOOTH_CONNECT on API 31+; catching
+     * [SecurityException] both hardens against a mid-session permission revoke and
+     * satisfies Lint's MissingPermission check via explicit handling — the same
+     * defensive idiom already used for requestMtu/discoverServices here and in
+     * [WatchBleManager.closeGatt].
+     */
+    private fun closeQuietly(gatt: BluetoothGatt) {
+        try {
+            gatt.close()
+        } catch (e: SecurityException) {
+            packetLogger.log("GATT", "SecurityException closing GATT: ${e.message}")
         }
     }
 
@@ -127,10 +143,19 @@ class WatchGattCallback(
         // Transition to Connected immediately so the UI is responsive; battery and
         // MAC come in as subsequent state updates once the GATT op chain below finishes.
         val device = gatt.device
+        // getName() requires BLUETOOTH_CONNECT (API 31+); read it defensively so a
+        // revoked permission can't crash discovery. The SecurityException handler also
+        // satisfies Lint's MissingPermission check (same idiom as the GATT ops here).
+        val deviceName = try {
+            device?.name
+        } catch (e: SecurityException) {
+            packetLogger.log("GATT", "SecurityException reading device name: ${e.message}")
+            null
+        }
         onStateChange(
             WatchConnectionState.Connected(
                 deviceAddress = device?.address ?: "unknown",
-                deviceName = device?.name,
+                deviceName = deviceName,
                 mtu = negotiatedMtu,
             )
         )

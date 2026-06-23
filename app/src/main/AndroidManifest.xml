@@ -19,7 +19,15 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Pre-Android-12 BLE scanning required location access. Both are capped at API 30:
+         on 12+ the neverForLocation BLUETOOTH_SCAN flag above covers scanning without any
+         location permission (verified on a real Android 14 phone). COARSE is declared
+         alongside FINE because Android lets users grant only approximate location, and
+         Lint (CoarseFineLocation) requires both whenever FINE is requested. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="30" />
     <!-- NEARBY_DEVICES is implicitly covered by BLUETOOTH_SCAN / BLUETOOTH_CONNECT on Android 12+. -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
