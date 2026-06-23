@@ -14,10 +14,15 @@ sealed class WatchConnectionState {
     data class Connecting(val deviceAddress: String) : WatchConnectionState()
 
     /**
-     * Fully connected: services discovered, notifications enabled, ready for commands.
+     * GATT link is up and the VeryFit service is discovered. This is **not** the same
+     * as "ready to write": notification/CCCD setup runs after this state is emitted.
+     * Writes must be gated on [ready] so a command never races the descriptor-write
+     * chain (Android GATT has no internal op queue; overlapping ops silently fail).
      *
      * @property deviceAddress The BLE MAC address of the connected watch.
      * @property deviceName The advertised device name, if available.
+     * @property ready True once notification enablement has finished and the watch is
+     *   safe to write to. False during the connected-but-initialising window.
      * @property batteryInfo Detailed battery info from command 321, or null if not yet received.
      * @property batteryPercent Battery level (0-100) derived from [batteryInfo], or null.
      * @property mtu Negotiated MTU size (typically 247 after requesting 517).
@@ -28,6 +33,7 @@ sealed class WatchConnectionState {
     data class Connected(
         val deviceAddress: String,
         val deviceName: String? = null,
+        val ready: Boolean = false,
         val batteryInfo: WatchBatteryInfo? = null,
         val batteryPercent: Int? = batteryInfo?.level,
         val mtu: Int = 23,

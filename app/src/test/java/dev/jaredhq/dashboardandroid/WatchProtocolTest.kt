@@ -178,6 +178,35 @@ class WatchProtocolTest {
     }
 
     @Test
+    fun parseMacAddressFromCapturedMacResponse_rejectsAllZeroAndAllFf() {
+        val zeros = byteArrayOf(0x02, 0x04, 0, 0, 0, 0, 0, 0)
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(zeros))
+        val ffs = byteArrayOf(
+            0x02, 0x04,
+            0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(),
+        )
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(ffs))
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_rejectsMismatchedDuplicate() {
+        // 14-byte response whose two echoed MAC copies disagree → corrupt, must be dropped.
+        val response = byteArrayOf(
+            0x02, 0x04,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45,
+            0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x46, // last byte differs
+        )
+        assertNull(WatchProtocol.parseMacAddressFromCapturedMacResponse(response))
+    }
+
+    @Test
+    fun parseMacAddressFromCapturedMacResponse_acceptsSingleCopyEightBytes() {
+        // Only one MAC copy present (no duplicate to cross-check) — still valid.
+        val response = byteArrayOf(0x02, 0x04, 0xF4.toByte(), 0x91.toByte(), 0x29, 0x51, 0xC6.toByte(), 0x45)
+        assertEquals("F4:91:29:51:C6:45", WatchProtocol.parseMacAddressFromCapturedMacResponse(response))
+    }
+
+    @Test
     fun buildMacAddressCommand_isCaptureVerified() {
         assertArrayEquals(byteArrayOf(0x02, 0x04), WatchProtocol.buildMacAddressCommand())
     }
@@ -195,6 +224,114 @@ class WatchProtocolTest {
         )
         assertTrue(WatchProtocol.looksLikeCapturedDaAdFrame(response))
         assertTrue(WatchProtocol.describeCapturedDaAdFrame(response).contains("declaredLen=29"))
+    }
+
+    // ── Basic info (02 01) ────────────────────────────────────────────────────────
+
+    @Test
+    fun parseBasicInfo_decodesDeviceIdLittleEndianAndBattery() {
+        // Watch-verified capture: device_id D8 1E (LE) = 7896, battery byte 7 = 0x5F = 95.
+        val packet = byteArrayOf(
+            0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x01, 0x00, 0x5F,
+            0x01, 0x00, 0x01, 0x00, 0x5A, 0x02, 0x02, 0x03, 0x06, 0x00,
+        )
+        val info = WatchProtocol.parseBasicInfo(packet)
+        assertNotNull(info)
+        info!!
+        assertEquals(7896, info.deviceId)
+        assertEquals(1, info.firmwareVersion)
+        assertEquals(95, info.batteryLevel)
+        assertEquals(0x5A, info.platform)
+        assertEquals(2, info.devType)
+    }
+
+    @Test
+    fun parseBasicInfo_referenceExampleDeviceId7896Battery86() {
+        // Reference example: device_id D8 1E -> 7896, energe (battery) = 86 (0x56).
+        val packet = byteArrayOf(
+            0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x00, 0x00, 0x56,
+        )
+        val info = WatchProtocol.parseBasicInfo(packet)
+        assertNotNull(info)
+        info!!
+        assertEquals(7896, info.deviceId)
+        assertEquals(86, info.batteryLevel)
+        // Trailing fields beyond this short-but-valid packet are absent, not a crash.
+        assertNull(info.platform)
+        assertNull(info.pair)
+    }
+
+    @Test
+    fun parseBasicInfo_firmwareVersionIsOffset4NotOffset1() {
+        // byte[1] is the type byte (0x01); firmware_version lives at offset 4. A packet
+        // whose offset-4 byte differs from byte[1] proves the parser reads offset 4.
+        val packet = byteArrayOf(
+            0x02, 0x01, 0xD8.toByte(), 0x1E, 0x07 /* fw at offset 4 */, 0x00, 0x00, 0x5A,
+        )
+        val info = WatchProtocol.parseBasicInfo(packet)
+        assertNotNull(info)
+        assertEquals(7, info!!.firmwareVersion)
+    }
+
+    @Test
+    fun parseBasicInfo_rejectsTooShortPacket() {
+        // 7 bytes — cannot reach the battery field at offset 7.
+        assertNull(WatchProtocol.parseBasicInfo(byteArrayOf(0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x00, 0x00)))
+    }
+
+    @Test
+    fun parseBasicInfo_rejectsWrongHeaderByte() {
+        // First byte not 0x02.
+        assertNull(WatchProtocol.parseBasicInfo(byteArrayOf(0x03, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x00, 0x00, 0x5A)))
+    }
+
+    @Test
+    fun parseBasicInfo_rejectsWrongType() {
+        // Second byte not 0x01 (e.g. a 02 A7 battery-poll response is not basic info).
+        assertNull(WatchProtocol.parseBasicInfo(byteArrayOf(0x02, 0xA7.toByte(), 0x01, 0x01, 0x00, 0x5F, 0x01, 0x00)))
+    }
+
+    // ── Activity version is decoupled from firmware version ────────────────────────
+
+    @Test
+    fun activityVersion_isReadFromOffset25() {
+        val buffer = ByteArray(30)
+        buffer[WatchProtocol.ACTIVITY_DATA_OFFSET] = 16
+        assertEquals(16, WatchProtocol.activityVersion(buffer))
+    }
+
+    @Test
+    fun activityVersion_returnsNullWhenBufferTooShort() {
+        assertNull(WatchProtocol.activityVersion(ByteArray(10)))
+    }
+
+    @Test
+    fun isSupportedActivityVersion_onlyAcceptsSixteen() {
+        assertTrue(WatchProtocol.isSupportedActivityVersion(16))
+        assertTrue(!WatchProtocol.isSupportedActivityVersion(1))
+        assertTrue(!WatchProtocol.isSupportedActivityVersion(17))
+    }
+
+    @Test
+    fun firmwareVersionOne_isNotTreatedAsUnsupportedActivityVersion() {
+        // Regression guard for the core bug: a basic-info firmwareVersion of 1 is normal
+        // and must parse fine. The activity-version check is a SEPARATE concern; even
+        // though activity version 1 is unsupported, that must not reject basic info.
+        val packet = byteArrayOf(0x02, 0x01, 0xD8.toByte(), 0x1E, 0x01, 0x00, 0x00, 0x5F)
+        val info = WatchProtocol.parseBasicInfo(packet)
+        assertNotNull(info)
+        assertEquals(1, info!!.firmwareVersion)
+        // Decoupling: the activity-version predicate says 1 is unsupported, yet basic
+        // info parsed successfully above — the two numbers never gate each other.
+        assertTrue(!WatchProtocol.isSupportedActivityVersion(info.firmwareVersion))
+    }
+
+    @Test
+    fun describeActivityVersion_unsupportedIsNonFatalAndNotConfusedWithFirmware() {
+        val desc = WatchProtocol.describeActivityVersion(1)
+        assertTrue(desc.contains("Unsupported activity-data version"))
+        assertTrue(desc.contains("BLE connection unaffected"))
+        assertTrue(desc.contains("not firmware_version"))
     }
 
     private fun assertArrayEquals(expected: ByteArray, actual: ByteArray) {
