@@ -14,6 +14,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,8 +48,17 @@ class WatchBleManager(private val context: Context) {
     private var gattCallback: WatchGattCallback? = null
     private var isScanning = false
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // The command queue is touched from two threads: the UI/main thread (button taps,
+    // probe-burst Handler callbacks) and the GATT binder thread (onCharacteristicWrite →
+    // drain). [pendingCommands] and [writeInProgress] are therefore only ever read/written
+    // while holding [commandLock]; the actual gatt.writeCharacteristic dispatch happens
+    // outside the lock so a framework call never blocks the other thread. Without this,
+    // two threads could both observe writeInProgress=false and dispatch overlapping writes,
+    // which Android GATT silently drops (it has no internal op queue).
+    private val commandLock = Any()
     private val pendingCommands = ArrayDeque<ByteArray>()
-    private var writeInProgress = false
+    private var writeInProgress = false // guarded by commandLock
 
     /** Epoch millis the current connection became [WatchConnectionState.Connected], or null. */
     @Volatile
@@ -197,8 +207,10 @@ class WatchBleManager(private val context: Context) {
      */
     fun connect(device: BluetoothDevice) {
         stopScan()
-        pendingCommands.clear()
-        writeInProgress = false
+        synchronized(commandLock) {
+            pendingCommands.clear()
+            writeInProgress = false
+        }
         // A fresh connection attempt: clear the previous session's connect time so
         // the eventual Connected state stamps a new window.
         connectedAtMillis = null
@@ -261,16 +273,19 @@ class WatchBleManager(private val context: Context) {
                 // to include them, so coalesce another one-off upload here.
                 onConnectionEvent?.invoke()
             },
-            onCommandWriteComplete = {
-                writeInProgress = false
-                drainCommandQueue()
-                if (!writeInProgress && pendingCommands.isEmpty()) onConnectionEvent?.invoke()
-            },
+            onCommandWriteComplete = { onWriteCompleted() },
             onNotificationsEnabled = {
+                // Notification setup is complete — only now is the link safe to write to.
+                // Flip Connected.ready so writeCommand() (and the UI) can distinguish the
+                // initialising window from a watch that's actually ready for commands.
+                _state.update { current ->
+                    if (current is WatchConnectionState.Connected) current.copy(ready = true)
+                    else current
+                }
                 // Official-app btsnoop showed the first useful post-CCCD probe is the
                 // short 0x02 0x01 request; the previous guessed AB frames only yielded
                 // ACKs. Keep legacy buttons manual, but auto-probe with captured bytes.
-                packetLogger.log("BLE", "Notifications enabled, queueing captured 02:01 status probe burst")
+                packetLogger.log("BLE", "Notifications enabled (ready), queueing captured 02:01 status probe burst")
                 requestCapturedStatusProbeBurst()
             },
         )
@@ -303,19 +318,48 @@ class WatchBleManager(private val context: Context) {
      * (0x0AF6). Frames are built by [WatchProtocol]; this method is transport-only.
      */
     fun writeCommand(command: ByteArray): Boolean {
-        if (_state.value !is WatchConnectionState.Connected) return false
+        val connected = _state.value as? WatchConnectionState.Connected ?: return false
+        // Gate on readiness: writing during the connected-but-initialising window would
+        // race the serialized CCCD descriptor-write chain and silently fail (Android GATT
+        // has no internal queue). Reject explicitly with a log rather than corrupt setup.
+        if (!connected.ready) {
+            packetLogger.log("GATT", "Ignoring write before ready (notification setup still in progress): ${command.toHex()}")
+            return false
+        }
         if (bluetoothGatt == null || gattCallback?.writeCharacteristic == null) return false
-        pendingCommands.addLast(command)
+        synchronized(commandLock) { pendingCommands.addLast(command) }
         drainCommandQueue()
         return true
     }
 
+    /**
+     * A write completed on the GATT binder thread: clear the in-flight flag, dispatch the
+     * next queued command, and — only when the queue has fully drained — coalesce a
+     * telemetry sync. All queue-state reads happen under [commandLock].
+     */
+    private fun onWriteCompleted() {
+        synchronized(commandLock) { writeInProgress = false }
+        drainCommandQueue()
+        val idle = synchronized(commandLock) { !writeInProgress && pendingCommands.isEmpty() }
+        if (idle) onConnectionEvent?.invoke()
+    }
+
     private fun drainCommandQueue() {
-        if (writeInProgress) return
-        val command = pendingCommands.removeFirstOrNull() ?: return
-        val gatt = bluetoothGatt ?: return
-        val callback = gattCallback ?: return
-        val characteristic = callback.writeCharacteristic ?: return
+        // Atomically claim the in-flight slot and pull the next command so the UI thread
+        // and the binder thread can't both dispatch at once. The framework write itself
+        // runs after the lock is released.
+        val command: ByteArray
+        val gatt: BluetoothGatt
+        val characteristic: BluetoothGattCharacteristic
+        synchronized(commandLock) {
+            if (writeInProgress) return
+            val g = bluetoothGatt ?: return
+            val ch = gattCallback?.writeCharacteristic ?: return
+            command = pendingCommands.removeFirstOrNull() ?: return
+            gatt = g
+            characteristic = ch
+            writeInProgress = true
+        }
 
         packetLogger.logRaw(WatchPacketLogger.DIRECTION_TX, characteristic.uuid.toString(), command)
         _state.update { current ->
@@ -323,33 +367,36 @@ class WatchBleManager(private val context: Context) {
             else current
         }
 
-        writeInProgress = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
                 val status = gatt.writeCharacteristic(characteristic, command, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    writeInProgress = false
                     packetLogger.log("GATT", "writeCharacteristic failed immediately status=$status")
-                    drainCommandQueue()
+                    failCurrentWriteAndDrain()
                 }
             } catch (e: SecurityException) {
-                writeInProgress = false
                 packetLogger.log("GATT", "SecurityException writing characteristic: ${e.message}")
+                synchronized(commandLock) { writeInProgress = false }
             }
         } else {
             @Suppress("DEPRECATION")
             characteristic.value = command
             try {
                 if (!gatt.writeCharacteristic(characteristic)) {
-                    writeInProgress = false
                     packetLogger.log("GATT", "writeCharacteristic returned false")
-                    drainCommandQueue()
+                    failCurrentWriteAndDrain()
                 }
             } catch (e: SecurityException) {
-                writeInProgress = false
                 packetLogger.log("GATT", "SecurityException writing characteristic: ${e.message}")
+                synchronized(commandLock) { writeInProgress = false }
             }
         }
+    }
+
+    /** A dispatch failed before any callback will fire: release the slot and try the next. */
+    private fun failCurrentWriteAndDrain() {
+        synchronized(commandLock) { writeInProgress = false }
+        drainCommandQueue()
     }
 
     /**
@@ -485,7 +532,10 @@ class WatchBleManager(private val context: Context) {
         lastDeviceAddress = lastDeviceAddress,
         lastDeviceName = lastDeviceName,
         lastMacAddress = lastMacAddress,
-        rawEvents = packetLogger.getRawEvents(),
+        // Raw TX/RX packet hex is developer-only diagnostic data. Per the project's
+        // privacy rules, only include it in debug builds; release syncs carry the
+        // connection metadata (device id, battery, mtu, state) without raw payloads.
+        rawEvents = if (BuildConfig.DEBUG) packetLogger.getRawEvents() else emptyList(),
     )
 
     internal fun closeGatt() {
@@ -535,9 +585,13 @@ private fun ScanResult.matchesTargetWatch(): Boolean {
     val advertisedServices = scanRecord?.serviceUuids.orEmpty().map { it.uuid }
     if (WatchBleManager.VERYFIT_SERVICE_UUID in advertisedServices) return true
 
-    // Fallback: match by the btsnoop-verified static BLE address.
-    val address = try { device?.address } catch (_: SecurityException) { null }
-    if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
+    // Debug-only fallback: match by the btsnoop-verified static BLE address. This is one
+    // specific developer's watch hard-coded for bring-up; release builds must rely on the
+    // advertised service UUID / name so the app doesn't silently target a fixed device.
+    if (BuildConfig.DEBUG) {
+        val address = try { device?.address } catch (_: SecurityException) { null }
+        if (address?.equals(WatchBleManager.KNOWN_WATCH_MAC, ignoreCase = true) == true) return true
+    }
 
     val name = scanRecord?.deviceName ?: try {
         device?.name
