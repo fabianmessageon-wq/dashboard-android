@@ -23,6 +23,7 @@ Compose-BOM version skew the local SDK surfaces. See README "Verification status
 
 ## Next (not yet built)
 
+- **Watch / Active 4 Pro private build** — current direction is Fabian-private first, not commercial/general-user polish. The `0x02` status/identity path is watch-verified and `ble-stability-ready-lifecycle` has added ready-gated writes, serialized command queueing, hardened notification setup, and strict `02 01` basic-info parsing. Next milestone: validate this lifecycle on Fabian's real phone/watch, then implement `33 DA AD` activity buffer reassembly only. See [`docs/plans/ble-master-plan.md`](plans/ble-master-plan.md).
 - **Phone app improvements plan** —
   [`docs/plans/phone-app-improvements.md`](plans/phone-app-improvements.md).
   **Dashboard side: ✅ implemented** (task In Progress state + visible chip;

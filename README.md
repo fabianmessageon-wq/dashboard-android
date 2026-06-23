@@ -47,6 +47,21 @@ dashboard (the server owns the contract; this owns the phone). See the plan:
 - **Offline-first:** the last Today payload is cached (Room) and rendered
   instantly; a WorkManager job refreshes it every ~15 min and updates the widget.
 
+## Watch integration direction
+
+The Active 4 Pro / VeryFit BLE work is currently a **Fabian-private build first**, not a monetized/general-user product track. The immediate goal is practical, privacy-first direct sync from Fabian's watch and phone into Fabian's self-hosted dashboard.
+
+Current BLE status:
+
+- Phase 1 status/identity transport is watch-verified for the `0x02` family commands:
+  - `02 04` → MAC response
+  - `02 01` → basic info/status response
+  - `02 A7` → battery response
+- The `ble-stability-ready-lifecycle` work adds a ready-gated BLE lifecycle, serialized write queue, hardened notification/indication setup, and strict `02 01` basic-info parsing.
+- `33 DA AD` activity reassembly/decoding is the next private-build milestone; full health/activity sync and commercial polish are intentionally deferred.
+
+For the current execution plan, see [`docs/plans/ble-master-plan.md`](docs/plans/ble-master-plan.md), especially the Fabian-private implementation phases.
+
 ## API contract
 
 The server endpoints, payloads, scopes, and auth are documented in
