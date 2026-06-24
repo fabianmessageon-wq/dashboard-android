@@ -37,13 +37,40 @@ Watch slices (new ladder):
 | Slice | State |
 |-------|-------|
 | W0 — Checkpoint: tag `pre-ido-sdk-baseline` + ADR 0001 | ✅ done |
-| W1 — Vendor SDK: `ido-watch-sdk.jar` + native libs + Gradle wiring (greenDAO/gson) | ✅ done, `assembleDebug` green |
+| W1 — Vendor SDK jar (targeted 4,511-class slice) + native libs + Gradle (greenDAO/gson) | ✅ done, `assembleDebug` green |
 | W2 — `WatchEngine` boundary + `IdoSdkWatchEngine` (v2 activity/HR/sleep mapping) | ✅ done, `compileDebugKotlin` green |
-| W3 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ next |
-| W4 — Hardware verify on Fabian's phone (VeryFit force-stopped): init → connect → sync → steps/HR/sleep | ▶ needs device |
-| W5 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `SyncV3CallBack` | later |
-| W6 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
-| W7 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
+| W3 — On-device: SDK init + scan + connect + **bind** | ✅ **verified on Galaxy S21 / Android 14** (bind persists, `bound=true`) |
+| W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ⚠ blocked — see "current blockers" |
+| W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ after W4 |
+| W6 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `SyncV3CallBack` | later |
+| W7 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
+| W8 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
+
+### Current blockers (W4) — health sync doesn't complete yet
+
+Proven on hardware: SDK loads/inits, native protocol stack runs, scan finds the watch
+(`F4:91:29:51:C6:45`), connect succeeds, and **bind succeeds** ("watch claimed by our app",
+persisted across launches). The remaining gap is the sync itself, with two concrete causes in
+the logs:
+
+1. **`supportFunctionInfo is null`** — the SDK's post-connect "encrypted handshake"
+   (`encryptedAtConnectedIfFunctionInfoIsNull`) needs the device **function/capability table**,
+   which our fresh SDK DB lacks. **Next step:** call `BLEManager.getFunctionTables()` after
+   connect/bind, wait for its callback to cache the table, then trigger `startSyncHealthData()`.
+   Likely the primary blocker.
+2. **Connection instability (dual-mode)** — `onConnectSuccess` fires repeatedly because the
+   watch's Classic BR/EDR profiles (HID/Handsfree/Audio) re-attach within seconds and contend
+   with the LE GATT link. A `cmd bluetooth_manager disable/enable` toggle clears it only briefly.
+   **Next step:** investigate SPP-priority transfer (the watch is DUAL; `isSppPriority`/`connectBT`)
+   or suppressing the Classic profiles for the watch during sync; consider a `status=133` auto-retry.
+
+Operational notes for the next session:
+- ADB is wireless: `192.168.20.100:40367` (rediscover via `adb mdns services` if dropped; do
+  **not** run `adb usb` — it drops the wireless link).
+- Force-stop VeryFit (`com.watch.life`) before testing; grant `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT`.
+- A debug auto-connect scaffold (`IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC`) fires connect+sync
+  ~4s after launch; remove it once the Watch screen drives connect/sync via the `WatchEngine`.
+- The watch is now **bound to our app** — VeryFit will need re-pairing (reopen it) if you want it back.
 
 ### Superseded clean-room direction (pre-2026-06-24, kept for reference)
 
