@@ -19,6 +19,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // The vendored IDO/VeryFit native libs (libVeryFitMulti.so, libprotocol.so)
+        // ship only arm ABIs (ADR 0001). Constrain packaging to those so the build
+        // doesn't expect x86 variants the SDK never provided.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -98,6 +103,14 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    // ── Vendored IDO/VeryFit watch SDK (ADR 0001) ────────────────────────────
+    // Compiled classes lifted from the VeryFit APK (com.ido.ble.*, com.veryfit.*)
+    // plus the runtime libs the SDK was built against. Native .so files live in
+    // src/main/jniLibs/. Only IdoSdkWatchEngine may import com.ido.* / com.veryfit.*.
+    implementation(files("libs/ido-watch-sdk.jar"))
+    implementation(libs.greendao)
+    implementation(libs.gson)
 
     // Unit tests (pure JVM — run without a device/emulator)
     testImplementation(libs.junit)
