@@ -4,7 +4,10 @@ import android.app.Application
 import android.util.Log
 import com.ido.ble.BLEManager
 import com.ido.ble.InitParam
+import com.ido.ble.bluetooth.connect.ConnectFailedReason
+import com.ido.ble.bluetooth.device.BLEDevice
 import com.ido.ble.callback.CallBackManager
+import com.ido.ble.callback.ConnectCallBack
 import com.ido.ble.callback.SyncCallBack
 import com.ido.ble.data.manage.database.HealthActivity
 import com.ido.ble.data.manage.database.HealthBloodPressed
@@ -34,7 +37,9 @@ import com.ido.ble.data.manage.database.HealthSportItem
  */
 class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
-    override var listener: WatchHealthListener? = null
+    // Defaults to a logcat listener so a sync is observable on-device before the upload
+    // path is wired; ServiceLocator/repository can replace it with the real uploader.
+    override var listener: WatchHealthListener? = LoggingWatchHealthListener
 
     @Volatile
     private var initialized = false
@@ -49,6 +54,17 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             registerCallbacks()
             initialized = true
             Log.i(TAG, "IDO SDK initialised")
+
+            // TEST SCAFFOLD (debug builds only): auto-connect to the known watch a few seconds
+            // after init so the connect→bind→sync→metrics path can be exercised on-device
+            // without UI. Remove once the Watch screen drives connect/sync. Gated off in release.
+            if (dev.jaredhq.dashboardandroid.BuildConfig.DEBUG && DEBUG_AUTO_CONNECT_MAC != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    Log.i(TAG, "DEBUG auto-connect → $DEBUG_AUTO_CONNECT_MAC")
+                    runCatching { connect(DEBUG_AUTO_CONNECT_MAC) }
+                        .onFailure { Log.e(TAG, "debug auto-connect failed", it) }
+                }, 4_000)
+            }
         }
     }
 
@@ -87,9 +103,43 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun registerCallbacks() {
         val cm = CallBackManager.getManager()
+        cm.registerConnectCallBack(connectCallBack)
         cm.registerSyncActivityCallBack(activityCallBack)
         cm.registerSyncHealthCallBack(healthCallBack)
         // NEXT: cm.registerSyncV3CallBack(v3CallBack) for SpO2/body-composition/stress/etc.
+    }
+
+    // ── Connection lifecycle ────────────────────────────────────────────────────────
+
+    private val connectCallBack = object : ConnectCallBack.ICallBack {
+        override fun onConnectStart(mac: String?) { Log.i(TAG, "onConnectStart $mac") }
+        override fun onConnecting(mac: String?) { Log.i(TAG, "onConnecting $mac") }
+        override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
+
+        override fun onConnectSuccess(mac: String?) {
+            Log.i(TAG, "onConnectSuccess $mac — bound=${runCatching { BLEManager.isBind() }.getOrNull()}")
+        }
+
+        override fun onInitCompleted(mac: String?) {
+            // SDK has finished its post-connect handshake and is ready for commands.
+            Log.i(TAG, "onInitCompleted $mac — starting health sync")
+            syncHealth()
+        }
+
+        override fun onDeviceInNotBindStatus(mac: String?) {
+            // Our SDK instance has a fresh DB and isn't bound to this watch yet (VeryFit owns
+            // the original bond). Bind so the watch will release its data to us.
+            Log.i(TAG, "onDeviceInNotBindStatus $mac — calling bind()")
+            BLEManager.bind()
+        }
+
+        override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
+            Log.w(TAG, "onConnectFailed reason=$reason mac=$mac")
+            listener?.onSyncFailed()
+        }
+
+        override fun onConnectBreak(mac: String?) { Log.w(TAG, "onConnectBreak $mac") }
+        override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
     }
 
     // ── SDK callbacks (v2) ────────────────────────────────────────────────────────
@@ -195,8 +245,21 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         sleepEndMinute = sleepEndedTimeM,
     )
 
+    /** Logs every decoded metric + sync lifecycle to logcat (tag [TAG]). Observability default. */
+    private object LoggingWatchHealthListener : WatchHealthListener {
+        override fun onActivityDay(day: WatchActivityDay) { Log.i(TAG, "ACTIVITY $day") }
+        override fun onHeartRateDay(day: WatchHeartRateDay) { Log.i(TAG, "HEART_RATE $day") }
+        override fun onSleepSession(session: WatchSleepSession) { Log.i(TAG, "SLEEP $session") }
+        override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
+        override fun onSyncComplete() { Log.i(TAG, "sync complete") }
+        override fun onSyncFailed() { Log.w(TAG, "sync failed") }
+    }
+
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
+
+        /** Debug-only auto-connect target (the Active 4 Pro MAC). Null disables the scaffold. */
+        val DEBUG_AUTO_CONNECT_MAC: String? = "F4:91:29:51:C6:45"
 
         /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
         fun Int.nonZero(): Int? = if (this != 0) this else null
