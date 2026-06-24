@@ -1,5 +1,13 @@
 # Active 4 Pro BLE Protocol Reverse-Engineering Plan
 
+> ## ⚠ Direction changed 2026-06-24 — read [ADR 0001](../adr/0001-vendor-ido-sdk.md) first
+>
+> The production path is no longer a clean-room reimplementation of the wire protocol — the
+> IDO/VeryFit SDK is now **vendored** (health-first, private-only; see ADR 0001). This document
+> stays valuable as: (1) the **clean-room-later** playbook for replacing high-value paths, and
+> (2) the **VeryFit-as-oracle** instrumentation guide. The SDK is the runtime engine today; this
+> describes how to make a path independent of it tomorrow.
+
 ## Purpose
 
 Avoid a slow, one-field-at-a-time Bluetooth workflow for the Kogan Active 4 Pro / VeryFit watch integration.

@@ -25,6 +25,12 @@ junit = "4.13.2"
 kotlinxCoroutinesTest = "1.8.1"
 androidxJunit = "1.2.1"
 
+# Runtime deps the vendored IDO/VeryFit watch SDK was compiled against (ADR 0001).
+# greenDAO is the SDK's ORM; gson is its JSON layer. The SDK ships its own generated
+# DAO/model classes in the vendor jar — these provide only the runtime libraries.
+greendao = "3.3.0"
+gson = "2.11.0"
+
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
@@ -63,6 +69,10 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
+
+# Vendored IDO/VeryFit watch SDK runtime deps (ADR 0001).
+greendao = { group = "org.greenrobot", name = "greendao", version.ref = "greendao" }
+gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,5 +1,19 @@
 # Active 4 Pro BLE Integration — Master Plan
 
+> ## ⚠ Direction changed 2026-06-24 — read [ADR 0001](../adr/0001-vendor-ido-sdk.md) first
+>
+> The watch integration moved from the **clean-room-first** approach this document describes to
+> a **hybrid: vendor the IDO/VeryFit SDK now, clean-room high-value paths later** (health-first,
+> private-only). The decompiled APK proved the real wire protocol lives in native libs
+> (`libVeryFitMulti.so`), so lifting the SDK gets full functionality fast.
+>
+> This plan is **kept as protocol/architecture reference and as the clean-room-later target** —
+> its UUIDs, native-boundary findings, `0x33`/`0xD1` notes, type-id table, and capture workflow
+> remain accurate and useful. But the *execution order* is now the watch slice ladder in
+> [`docs/roadmap.md`](../roadmap.md), and the production data path is the vendored SDK behind
+> `WatchEngine` / `IdoSdkWatchEngine`, not a per-metric clean-room reimplementation. The existing
+> clean-room code (`WatchBleManager`/`WatchProtocol`) is retained as `CleanRoomWatchEngine`.
+
 ## Goal
 
 Build an independent Android-dashboard bridge for Fabian's Kogan Active 4 Pro smartwatch, avoiding VeryFit/vendor/cloud/third-party health platforms for the private build. The watch data flows: Active 4 Pro → dashboard-android app → Fabian's self-hosted dashboard API.

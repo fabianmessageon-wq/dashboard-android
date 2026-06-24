@@ -10,6 +10,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 
 /**
  * The single data entry point for the app UI, the widget, and the refresh
@@ -128,6 +130,10 @@ class DashboardRepository(
      */
     suspend fun syncWatch(request: WatchSyncRequest): Result<WatchSyncResult> =
         runApi { client().syncWatch(request) }
+
+    /** Upload a batch of decoded watch health records (activity/HR/sleep/workouts). */
+    suspend fun uploadWatchHealth(batch: WatchHealthBatch): Result<WatchHealthUploadResult> =
+        runApi { client().uploadWatchHealth(batch) }
 
     /**
      * Resolve the API client, converting any *construction* failure (e.g. a

@@ -63,6 +63,7 @@ fun WatchScreen(
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
     onCapturedStatusProbe: () -> Unit,
+    onActivitySyncRequest: () -> Unit,
     onRawCommandChange: (String) -> Unit,
     onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
@@ -78,6 +79,7 @@ fun WatchScreen(
         onDeviceInfoRequest = onDeviceInfoRequest,
         onBatteryInfoRequest = onBatteryInfoRequest,
         onCapturedStatusProbe = onCapturedStatusProbe,
+        onActivitySyncRequest = onActivitySyncRequest,
         onRawCommandChange = onRawCommandChange,
         onRawCommandSend = onRawCommandSend,
         onSyncClick = onSyncClick,
@@ -96,6 +98,7 @@ private fun WatchContent(
     onDeviceInfoRequest: () -> Unit,
     onBatteryInfoRequest: () -> Unit,
     onCapturedStatusProbe: () -> Unit,
+    onActivitySyncRequest: () -> Unit,
     onRawCommandChange: (String) -> Unit,
     onRawCommandSend: () -> Unit,
     onSyncClick: () -> Unit,
@@ -237,6 +240,16 @@ private fun WatchContent(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Captured Probe (02:01)")
+            }
+
+            // Phase 2: manual-only activity-buffer trigger. UNVERIFIED request bytes; may
+            // cause the watch to mark activity as synced, so it is a deliberate tap only.
+            OutlinedButton(
+                onClick = onActivitySyncRequest,
+                enabled = ready,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Activity Sync (33 DA AD · UNVERIFIED)")
             }
 
             OutlinedTextField(
@@ -430,6 +443,7 @@ private fun PreviewDisconnected() {
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
             onCapturedStatusProbe = {},
+            onActivitySyncRequest = {},
             onRawCommandChange = {},
             onRawCommandSend = {},
             onSyncClick = {},
@@ -463,6 +477,7 @@ private fun PreviewConnected() {
             onDeviceInfoRequest = {},
             onBatteryInfoRequest = {},
             onCapturedStatusProbe = {},
+            onActivitySyncRequest = {},
             onRawCommandChange = {},
             onRawCommandSend = {},
             onSyncClick = {},

@@ -28,6 +28,9 @@ class WatchGattCallback(
     private val onResponseHex: (String) -> Unit = {},
     private val onCommandWriteComplete: (() -> Unit)? = null,
     private val onNotificationsEnabled: (() -> Unit)? = null,
+    // Per-connection activity-buffer reassembler. Phase 2 = reassembly only; a completed
+    // buffer is routed through the activity-version helpers, never field-decoded here.
+    private val activityReassembler: WatchActivityReassembler = WatchActivityReassembler(),
 ) : BluetoothGattCallback() {
 
     var writeCharacteristic: BluetoothGattCharacteristic? = null
@@ -65,13 +68,29 @@ class WatchGattCallback(
                     }
                 } else {
                     onStateChange(WatchConnectionState.Error("Connection failed: status=$status"))
-                    gatt.close()
+                    closeQuietly(gatt)
                 }
             }
             BluetoothProfile.STATE_DISCONNECTED -> {
                 onStateChange(WatchConnectionState.Disconnected)
-                gatt.close()
+                closeQuietly(gatt)
             }
+        }
+    }
+
+    /**
+     * Close the GATT client, tolerating a revoked BLUETOOTH_CONNECT permission.
+     * [BluetoothGatt.close] requires BLUETOOTH_CONNECT on API 31+; catching
+     * [SecurityException] both hardens against a mid-session permission revoke and
+     * satisfies Lint's MissingPermission check via explicit handling — the same
+     * defensive idiom already used for requestMtu/discoverServices here and in
+     * [WatchBleManager.closeGatt].
+     */
+    private fun closeQuietly(gatt: BluetoothGatt) {
+        try {
+            gatt.close()
+        } catch (e: SecurityException) {
+            packetLogger.log("GATT", "SecurityException closing GATT: ${e.message}")
         }
     }
 
@@ -127,10 +146,19 @@ class WatchGattCallback(
         // Transition to Connected immediately so the UI is responsive; battery and
         // MAC come in as subsequent state updates once the GATT op chain below finishes.
         val device = gatt.device
+        // getName() requires BLUETOOTH_CONNECT (API 31+); read it defensively so a
+        // revoked permission can't crash discovery. The SecurityException handler also
+        // satisfies Lint's MissingPermission check (same idiom as the GATT ops here).
+        val deviceName = try {
+            device?.name
+        } catch (e: SecurityException) {
+            packetLogger.log("GATT", "SecurityException reading device name: ${e.message}")
+            null
+        }
         onStateChange(
             WatchConnectionState.Connected(
                 deviceAddress = device?.address ?: "unknown",
-                deviceName = device?.name,
+                deviceName = deviceName,
                 mtu = negotiatedMtu,
             )
         )
@@ -347,9 +375,12 @@ class WatchGattCallback(
             onMacResponse(it)
             return
         }
-        if (WatchProtocol.looksLikeCapturedDaAdFrame(value)) {
-            packetLogger.log("FRAME", WatchProtocol.describeCapturedDaAdFrame(value))
-            return
+        // 33 DA AD activity buffer (Phase 2 — reassembly only, no field decode). Route
+        // every 0x33 chunk (preamble + continuations) through the reassembler; only fall
+        // through to generic frame logging when it's not part of an in-flight buffer.
+        if (value.isNotEmpty() && value[0] == 0x33.toByte()) {
+            val result = activityReassembler.accept(value)
+            if (handleActivityResult(result, value)) return
         }
 
         // 3) Binary IDO V3 frame path. Log the structured breakdown first.
@@ -384,5 +415,56 @@ class WatchGattCallback(
         }
 
         packetLogger.log("PARSE", "Frame not recognised as battery (cmd=0x%02X key=0x%02X, crcValid=${frame.crcValid})".format(frame.cmd, frame.key))
+    }
+
+    /**
+     * Log the outcome of an activity-reassembly step. Returns true when the chunk was
+     * consumed by the reassembler (caller should stop), false when it was [Ignored] and
+     * should fall through to the generic frame path.
+     *
+     * On a completed buffer we only read/log the activity *version* via the existing
+     * helpers — no field decode in Phase 2. An unsupported version is logged and skipped;
+     * the BLE connection is left untouched.
+     */
+    private fun handleActivityResult(result: WatchActivityReassembler.Result, chunk: ByteArray): Boolean {
+        when (result) {
+            is WatchActivityReassembler.Result.Ignored -> return false
+            is WatchActivityReassembler.Result.Started ->
+                packetLogger.log(
+                    "ACTIVITY",
+                    "Activity buffer start: ${WatchProtocol.describeCapturedDaAdFrame(chunk)} " +
+                        "(${result.received}/${result.expected} bytes)",
+                )
+            is WatchActivityReassembler.Result.Appended ->
+                packetLogger.log("ACTIVITY", "Activity chunk appended (${result.received}/${result.expected} bytes)")
+            is WatchActivityReassembler.Result.Malformed ->
+                packetLogger.log(
+                    "ACTIVITY",
+                    "Activity preamble declared implausible length=${result.declaredLength}; dropped (capture needed). raw=${chunk.toHex()}",
+                )
+            is WatchActivityReassembler.Result.Complete -> {
+                val buffer = result.activityBuffer
+                val version = WatchProtocol.activityVersion(buffer)
+                if (version != null) {
+                    packetLogger.log(
+                        "ACTIVITY",
+                        "Activity buffer complete (${buffer.size} bytes): ${WatchProtocol.describeActivityVersion(version)}",
+                    )
+                    // Phase 3: decode the summary header only when the version is supported.
+                    // Unsupported/empty buffers fall through non-fatally (logged above). The
+                    // decoded summary is REFERENCE_ONLY and log-only — never uploaded/persisted.
+                    WatchProtocol.parseActivitySummary(buffer)?.let { summary ->
+                        packetLogger.log("ACTIVITY", summary.describe())
+                    }
+                } else {
+                    packetLogger.log(
+                        "ACTIVITY",
+                        "Activity buffer complete (${buffer.size} bytes) but too short to read version at " +
+                            "offset ${WatchProtocol.ACTIVITY_DATA_OFFSET}",
+                    )
+                }
+            }
+        }
+        return true
     }
 }

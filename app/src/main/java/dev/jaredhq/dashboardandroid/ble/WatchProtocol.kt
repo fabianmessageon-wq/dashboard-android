@@ -170,6 +170,38 @@ object WatchProtocol {
     /** Capture-observed VeryFit request that produced real 0x0AF7 data after CCCDs. */
     fun buildCapturedStatusProbeCommand(): ByteArray = byteArrayOf(0x02, 0x01)
 
+    /**
+     * Activity-buffer sync request — **reference-documented, UNVERIFIED on this watch.**
+     *
+     * From the IDO/VeryFit/Ryze Web-Bluetooth reference downloader, this is the write
+     * that makes the watch stream its `33 DA AD` activity buffer back on `0x0AF7`:
+     * `33 DA AD DA AD 01 10 00 04 00 0B 01 00 04 00 00 00 00 00`. The trailing
+     * sequence/cmd bytes are reference-observed and may vary until a capture confirms
+     * them; the reference shows a variant with `16 00 00 04` in place of `0B 01 00 04`.
+     *
+     * ⚠ Side effect: sending and completing a sync MAY cause the watch to mark the
+     * activity as synced. This must stay a deliberate, manual-only action — never wire
+     * it into the automatic post-CCCD probe burst.
+     */
+    fun buildActivitySyncRequest(): ByteArray = byteArrayOf(
+        0x33, 0xDA.toByte(), 0xAD.toByte(), 0xDA.toByte(), 0xAD.toByte(),
+        0x01, 0x10, 0x00, 0x04, 0x00, 0x0B, 0x01, 0x00, 0x04,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    )
+
+    /**
+     * Activity-sync request **variant** the reference notes alongside [buildActivitySyncRequest]:
+     * `16 00 00 04` in place of `0B 01 00 04`. On-device the primary request returned an empty
+     * version-0 buffer, so this variant exists to try eliciting a non-empty **version-16**
+     * buffer. Same UNVERIFIED / may-mark-synced caveat applies — manual use only, never
+     * auto-fired. Can also be entered by hand via the Watch screen's raw-hex command field.
+     */
+    fun buildActivitySyncRequestV16Variant(): ByteArray = byteArrayOf(
+        0x33, 0xDA.toByte(), 0xAD.toByte(), 0xDA.toByte(), 0xAD.toByte(),
+        0x01, 0x10, 0x00, 0x04, 0x00, 0x16, 0x00, 0x00, 0x04,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    )
+
     /** Parse tester-entered hex such as `AB 01 41 01 00 00 00 C3 F7` into bytes. */
     fun parseHexCommand(input: String): ByteArray? {
         val cleaned = input
@@ -328,6 +360,87 @@ object WatchProtocol {
                 "Skipping activity decode; BLE connection unaffected. NOTE: this is the activity-data " +
                 "version, not firmware_version from basic info."
         }
+
+    // ── Activity summary decode (Private Phase 3 — summary only) ──────────────────
+    //
+    // Offsets below are **relative to [ACTIVITY_DATA_OFFSET]** (so absolute = 25 + rel),
+    // taken from the IDO/VeryFit/Ryze reference downloader's version-16 activity record.
+    //
+    // ⚠ REFERENCE_ONLY: these offsets are a documented hypothesis. On-device we have only
+    // ever seen an empty version-0 buffer, so none of the field positions/units below are
+    // confirmed against Fabian's watch yet. This whole table is the single place to correct
+    // once a real v16 capture lands — same "ship a loud hypothesis, confirm with one capture"
+    // approach already used for FRAME_HEAD / FRAME_CMD_KEY / parseBatteryInfoFromBinary.
+
+    private const val ACT_OFF_VERSION = 0       // u8
+    private const val ACT_OFF_TYPE = 1          // u8  activity/workout type code
+    private const val ACT_OFF_START_TIME = 2    // u32 LE, Unix epoch seconds
+    private const val ACT_OFF_DURATION = 6      // u32 LE, seconds
+    private const val ACT_OFF_STEPS = 10        // u32 LE
+    private const val ACT_OFF_DISTANCE = 14     // u32 LE, metres (unit unconfirmed)
+    private const val ACT_OFF_CALORIES = 18     // u32 LE (cal vs kcal unconfirmed)
+    private const val ACT_OFF_AVG_HR = 22       // u8
+    private const val ACT_OFF_MAX_HR = 23       // u8
+    private const val ACT_OFF_MIN_HR = 24       // u8
+
+    /**
+     * Decode the **summary header** of a reassembled `33 DA AD` activity buffer.
+     *
+     * Returns null when the buffer is too short to even hold the activity version, or when the
+     * activity version is not [SUPPORTED_ACTIVITY_VERSION] (16) — callers should log the version
+     * via [describeActivityVersion] and treat an unsupported/empty buffer as non-fatal. For a
+     * supported buffer it decodes best-effort: any field beyond the buffer end comes back null
+     * rather than throwing, so a truncated-but-valid v16 buffer still yields its decoded prefix.
+     *
+     * ⚠ Every field is REFERENCE_ONLY (see [WatchActivitySummary]) until a real v16 capture
+     * confirms the offsets. Never throws.
+     */
+    fun parseActivitySummary(activityBuffer: ByteArray): WatchActivitySummary? {
+        val base = ACTIVITY_DATA_OFFSET
+        if (activityBuffer.size <= base + ACT_OFF_VERSION) return null
+        val version = activityBuffer[base + ACT_OFF_VERSION].toInt() and 0xFF
+        if (!isSupportedActivityVersion(version)) return null
+
+        // Length-safe little-endian readers relative to the data section. Return null when the
+        // field's bytes aren't fully present so a short buffer degrades gracefully.
+        fun u8(rel: Int): Int? {
+            val i = base + rel
+            return if (i < activityBuffer.size) activityBuffer[i].toInt() and 0xFF else null
+        }
+        fun u32(rel: Int): Long? {
+            val i = base + rel
+            if (i + 4 > activityBuffer.size) return null
+            return ((activityBuffer[i].toLong() and 0xFF)) or
+                ((activityBuffer[i + 1].toLong() and 0xFF) shl 8) or
+                ((activityBuffer[i + 2].toLong() and 0xFF) shl 16) or
+                ((activityBuffer[i + 3].toLong() and 0xFF) shl 24)
+        }
+        // A heart-rate byte of 0 means "not measured" on this family — surface as absent.
+        fun hr(rel: Int): Int? = u8(rel)?.takeIf { it > 0 }
+
+        val confidence = buildMap {
+            put(WatchActivitySummary.Field.VERSION, ActivityFieldConfidence.CAPTURE_OBSERVED)
+            for (f in WatchActivitySummary.Field.entries) {
+                if (f != WatchActivitySummary.Field.VERSION) {
+                    put(f, ActivityFieldConfidence.REFERENCE_ONLY)
+                }
+            }
+        }
+
+        return WatchActivitySummary(
+            activityVersion = version,
+            activityType = u8(ACT_OFF_TYPE),
+            startTimeEpochSeconds = u32(ACT_OFF_START_TIME),
+            durationSeconds = u32(ACT_OFF_DURATION),
+            steps = u32(ACT_OFF_STEPS),
+            distanceMeters = u32(ACT_OFF_DISTANCE),
+            calories = u32(ACT_OFF_CALORIES),
+            avgHeartRate = hr(ACT_OFF_AVG_HR),
+            maxHeartRate = hr(ACT_OFF_MAX_HR),
+            minHeartRate = hr(ACT_OFF_MIN_HR),
+            confidence = confidence,
+        )
+    }
 
     // ── Battery extraction (two independent, clearly-labelled strategies) ─────────
 

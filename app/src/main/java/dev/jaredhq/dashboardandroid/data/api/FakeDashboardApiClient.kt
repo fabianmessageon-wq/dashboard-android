@@ -9,6 +9,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -105,6 +107,12 @@ class FakeDashboardApiClient(
         tick()
         // The offline fake simply acknowledges — no telemetry is persisted.
         return WatchSyncResult(accepted = true, deviceId = request.deviceId)
+    }
+
+    override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult {
+        tick()
+        // The offline fake simply acknowledges — no health data is persisted.
+        return WatchHealthUploadResult(accepted = true, storedCount = batch.recordCount)
     }
 
     private suspend fun tick() {

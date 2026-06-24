@@ -1,12 +1,17 @@
 package dev.jaredhq.dashboardandroid.notify
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import dev.jaredhq.dashboardandroid.MainActivity
 import dev.jaredhq.dashboardandroid.R
 import dev.jaredhq.dashboardandroid.domain.model.NotificationItem
@@ -58,8 +63,12 @@ object Notifier {
         )
     }
 
+    // Posting is gated by canPostNotifications() at the top, which does an explicit
+    // checkSelfPermission(POST_NOTIFICATIONS) on API 33+. Lint can't follow that guard
+    // across the helper call, so the notify() site is suppressed narrowly here.
+    @SuppressLint("MissingPermission")
     fun notifyReminder(context: Context, item: NotificationItem) {
-        if (!enabled(context)) return
+        if (!canPostNotifications(context)) return
         val body = listOfNotNull(item.timeLabel, item.detail)
             .filter { it.isNotBlank() }
             .joinToString(" · ")
@@ -85,8 +94,10 @@ object Notifier {
             .notify(REMINDER_ID_BASE + (item.id.hashCode() and 0x3FFFFFFF), n)
     }
 
+    // See notifyReminder: the notify() site is guarded by canPostNotifications().
+    @SuppressLint("MissingPermission")
     fun notifyQuote(context: Context, quote: QuotePayload) {
-        if (!enabled(context)) return
+        if (!canPostNotifications(context)) return
         if (quote.text.isBlank()) return
         val n = baseBuilder(context, CHANNEL_QUOTE)
             .setContentTitle("Daily quote")
@@ -124,6 +135,19 @@ object Notifier {
         )
     }
 
-    private fun enabled(context: Context): Boolean =
-        NotificationManagerCompat.from(context).areNotificationsEnabled()
+    /**
+     * True only when the app may actually post a notification. On Android 13+ this
+     * requires the runtime POST_NOTIFICATIONS permission (requested in MainActivity);
+     * below API 33 it is implicitly granted. We also honour the user's per-app/channel
+     * toggle via areNotificationsEnabled(), so callers stay simple no-ops when off.
+     */
+    private fun canPostNotifications(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return false
+        }
+        return NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
 }

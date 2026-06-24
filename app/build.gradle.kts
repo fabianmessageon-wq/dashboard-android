@@ -19,6 +19,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+
+        // The vendored IDO/VeryFit native libs (libVeryFitMulti.so, libprotocol.so)
+        // ship only arm ABIs (ADR 0001). Constrain packaging to those so the build
+        // doesn't expect x86 variants the SDK never provided.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -98,6 +103,21 @@ dependencies {
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    // ── Vendored IDO/VeryFit watch SDK (ADR 0001) ────────────────────────────
+    // Comprehensive set of compiled classes lifted from the VeryFit APK: com.ido.ble.*,
+    // com.veryfit.*, the chip-vendor SDKs (com.realsil.*, com.sifli.*), and the SDK's
+    // obfuscated helper classes (top-level wordlist packages acorn/basilisk/… + a-n)
+    // which the obfuscator scattered across every dex. Excludes only what the app already
+    // provides via Gradle (androidx/kotlin/kotlinx/okhttp3/okio/retrofit2) and the VeryFit
+    // UI. gson + greenrobot (greenDAO/EventBus) ship INSIDE this jar at the exact versions
+    // the SDK was compiled against — so no separate Gradle deps for them (avoids skew + dupes).
+    // Native .so files live in src/main/jniLibs/. Only IdoSdkWatchEngine imports com.ido.*.
+    // OSS libs the SDK uses (greenDAO, gson) come from Gradle, not the jar, to avoid
+    // duplicate-class conflicts with the app's transitive graph.
+    implementation(files("libs/ido-watch-sdk.jar"))
+    implementation(libs.greendao)
+    implementation(libs.gson)
 
     // Unit tests (pure JVM — run without a device/emulator)
     testImplementation(libs.junit)

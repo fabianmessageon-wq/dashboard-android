@@ -89,6 +89,34 @@ That drives an offline-first cache and a contract isolated behind a repository.
 - **Forward compatibility.** Lenient JSON (`ignoreUnknownKeys`) + nullable DTOs +
   `UNKNOWN` enum fallbacks, so a newer server doesn't break an older app.
 
+## Watch integration — the `WatchEngine` boundary (ADR 0001)
+
+Watch data has its own seam, separate from the dashboard contract above. Two engines sit
+behind one interface so the vendored SDK never leaks upward and "clean-room later" is a swap:
+
+```
+  ViewModels / WorkManager sync / repository
+            │  (app's own domain types: WatchActivityDay, WatchHeartRateDay, …)
+            ▼
+     WatchEngine (interface)  ── watch/engine/WatchEngine.kt
+        ├── IdoSdkWatchEngine   ← ACTIVE. Wraps the vendored IDO/VeryFit SDK
+        │     (com.ido.ble.BLEManager + SyncCallBack/SyncV3CallBack). The ONLY file
+        │     allowed to import com.ido.* / com.veryfit.*. Native lib does all framing;
+        │     mappers are pure SDK-type → domain field copies.
+        └── CleanRoomWatchEngine ← RETAINED. The direct-BLE clean-room code
+              (WatchBleManager/WatchProtocol/WatchActivityReassembler) — future
+              independent path + protocol oracle cross-check.
+```
+
+- **Why vendored:** the decompiled APK proved the real wire protocol is in native libs, so
+  lifting the SDK gives full watch functionality fast (private build). See
+  [`adr/0001-vendor-ido-sdk.md`](adr/0001-vendor-ido-sdk.md).
+- **`watch/engine/WatchHealthModels.kt`** — the app's own health types; shapes mirror the
+  dashboard `watch_*` tables so the upload DTOs are a thin projection.
+- **Quarantine invariant:** a grep for `import com.ido` / `import com.veryfit` must match only
+  `IdoSdkWatchEngine.kt`. Keep it that way.
+- `ServiceLocator.watchEngine` selects the active engine (eager, guarded init at startup).
+
 ## Not yet implemented (intentional V1 cuts)
 
 - A dedicated Tasks list screen (the plan allows trimming to Today/Capture/
