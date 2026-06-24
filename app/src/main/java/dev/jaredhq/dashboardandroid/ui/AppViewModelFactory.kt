@@ -6,6 +6,7 @@ import dev.jaredhq.dashboardandroid.di.ServiceLocator
 import dev.jaredhq.dashboardandroid.ui.capture.CaptureViewModel
 import dev.jaredhq.dashboardandroid.ui.settings.SettingsViewModel
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
+import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
 import dev.jaredhq.dashboardandroid.ui.watch.WatchViewModel
 
 /**
@@ -21,6 +22,12 @@ class AppViewModelFactory : ViewModelProvider.Factory {
             CaptureViewModel(ServiceLocator.repository) as T
         modelClass.isAssignableFrom(SettingsViewModel::class.java) ->
             SettingsViewModel(ServiceLocator.settings, ServiceLocator.repository) as T
+        modelClass.isAssignableFrom(WatchHealthViewModel::class.java) ->
+            WatchHealthViewModel(
+                engine = ServiceLocator.watchEngine,
+                deviceId = ServiceLocator.watchDeviceId,
+                registerUiListener = { ServiceLocator.watchUiListener = it },
+            ) as T
         modelClass.isAssignableFrom(WatchViewModel::class.java) ->
             WatchViewModel(ServiceLocator.watchBleManager) as T
         else -> throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")

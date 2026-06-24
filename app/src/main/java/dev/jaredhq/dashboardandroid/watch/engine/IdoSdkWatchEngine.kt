@@ -25,7 +25,11 @@ import com.ido.ble.data.manage.database.HealthSleepItem
 import com.ido.ble.data.manage.database.HealthSleepV3
 import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
+import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * [WatchEngine] backed by the vendored IDO/VeryFit SDK (ADR 0001).
@@ -49,6 +53,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     // path is wired; ServiceLocator/repository can replace it with the real uploader.
     override var listener: WatchHealthListener? = LoggingWatchHealthListener
 
+    private val _connectionState =
+        MutableStateFlow(WatchEngineConnectionState.DISCONNECTED)
+    override val connectionState: StateFlow<WatchEngineConnectionState> =
+        _connectionState.asStateFlow()
+
     @Volatile
     private var initialized = false
 
@@ -62,17 +71,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             registerCallbacks()
             initialized = true
             Log.i(TAG, "IDO SDK initialised")
-
-            // TEST SCAFFOLD (debug builds only): auto-connect to the known watch a few seconds
-            // after init so the connect→bind→sync→metrics path can be exercised on-device
-            // without UI. Remove once the Watch screen drives connect/sync. Gated off in release.
-            if (dev.jaredhq.dashboardandroid.BuildConfig.DEBUG && DEBUG_AUTO_CONNECT_MAC != null) {
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    Log.i(TAG, "DEBUG auto-connect → $DEBUG_AUTO_CONNECT_MAC")
-                    runCatching { connect(DEBUG_AUTO_CONNECT_MAC) }
-                        .onFailure { Log.e(TAG, "debug auto-connect failed", it) }
-                }, 4_000)
-            }
+            // The product Watch screen now drives connect/sync via this engine, and
+            // WatchSyncWorker drives it in the background — so the old debug auto-connect scaffold
+            // is gone (it would race the UI/worker for the single GATT link).
         }
     }
 
@@ -106,12 +107,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         targetMac = macAddress.uppercase()
         functionTableCached = false
         Log.i(TAG, "connect($macAddress) → scanning to find + bind")
+        _connectionState.value = WatchEngineConnectionState.SCANNING
         BLEManager.startScanDevices()
     }
 
     override fun disconnect() {
         functionTableCached = false
         pendingSyncAfterFunctionTable = false
+        _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
     }
 
@@ -141,6 +144,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // startSyncHealthData()/startSyncActivityData() concurrently instead made the watch NAK
         // the interleaved data-pull commands with status=3. Data arrives via the ISyncDataListener.
         Log.i(TAG, "syncAllData (config+health+activity+V3, sequential)")
+        _connectionState.value = WatchEngineConnectionState.SYNCING
         val para = SyncPara().apply {
             // Config sync *pushes* phone settings to the watch; we only read health, and on this
             // device it fails ("sync config failed!13"), so skip it (VeryFit's restart path does
@@ -152,6 +156,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
         BLEManager.syncAllData(para)
     }
+
+    /** Connection state to settle on once a sync run ends — CONNECTED if the link is still up. */
+    private fun postSyncState(): WatchEngineConnectionState =
+        if (isConnected()) WatchEngineConnectionState.CONNECTED
+        else WatchEngineConnectionState.DISCONNECTED
 
     private fun registerCallbacks() {
         val cm = CallBackManager.getManager()
@@ -174,6 +183,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.d(TAG, "found '${device.mDeviceName}' $addr rssi=${device.mRssi}")
             if (addr.equals(targetMac, ignoreCase = true)) {
                 Log.i(TAG, "target watch found → stop scan + connect")
+                _connectionState.value = WatchEngineConnectionState.CONNECTING
                 BLEManager.stopScanDevices()
                 BLEManager.connect(device)
             }
@@ -181,7 +191,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     private val connectCallBack = object : ConnectCallBack.ICallBack {
-        override fun onConnectStart(mac: String?) { Log.i(TAG, "onConnectStart $mac") }
+        override fun onConnectStart(mac: String?) {
+            Log.i(TAG, "onConnectStart $mac")
+            _connectionState.value = WatchEngineConnectionState.CONNECTING
+        }
         override fun onConnecting(mac: String?) { Log.i(TAG, "onConnecting $mac") }
         override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
 
@@ -192,7 +205,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 // Fresh SDK DB isn't bound to this watch (VeryFit owns the original bond).
                 // Bind to claim it — may prompt a confirmation on the watch face (onNeedAuth).
                 Log.i(TAG, "not bound → bind()")
+                _connectionState.value = WatchEngineConnectionState.BINDING
                 BLEManager.bind()
+            } else {
+                _connectionState.value = WatchEngineConnectionState.CONNECTED
             }
         }
 
@@ -215,6 +231,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
             Log.w(TAG, "onConnectFailed reason=$reason mac=$mac")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
 
@@ -222,6 +239,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "onConnectBreak $mac")
             functionTableCached = false
             pendingSyncAfterFunctionTable = false
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
     }
@@ -229,6 +247,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private val bindCallBack = object : BindCallBack.ICallBack {
         override fun onSuccess() {
             Log.i(TAG, "BIND SUCCESS — watch claimed by our app; fetching function table then syncing")
+            _connectionState.value = WatchEngineConnectionState.CONNECTED
             // Now that bind has actually completed, the device will release its data. Give the
             // link a beat to settle (Classic profiles re-attach right after bind), then syncHealth()
             // which first pulls the function table (getFunctionTables) before the actual sync.
@@ -236,11 +255,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
         override fun onNeedAuth(code: Int) {
             Log.w(TAG, "BIND needs confirmation on the WATCH FACE now (code=$code) — tap to allow")
+            _connectionState.value = WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
         }
-        override fun onReject() { Log.w(TAG, "bind REJECTED on the watch") }
-        override fun onCancel() { Log.w(TAG, "bind cancelled") }
+        override fun onReject() {
+            Log.w(TAG, "bind REJECTED on the watch")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        }
+        override fun onCancel() {
+            Log.w(TAG, "bind cancelled")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        }
         override fun onFailed(error: BindCallBack.BindFailedError?) {
             Log.w(TAG, "bind FAILED: $error")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
     }
@@ -271,10 +298,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onProgress(percent: Int) { listener?.onSyncProgress(percent) }
         override fun onSuccess() {
             Log.i(TAG, "syncAllData onSuccess")
+            _connectionState.value = postSyncState()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
+            // Often the benign post-transfer conn-param step failing after all data is delivered
+            // (roadmap W4) — the link is usually still up, so reflect actual connectivity.
             Log.w(TAG, "syncAllData onFailed: $type")
+            _connectionState.value = postSyncState()
             listener?.onSyncFailed()
         }
     }
@@ -416,12 +447,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             }
         }
 
-        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, V3 sport
-        // (a per-minute daily activity rollup, distinct from HealthActivityV3 workout sessions),
-        // BP V3, body composition, noise, pressure, swimming, ECG, emotion-health. ──
-        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {
-            if (data != null) Log.d(TAG, "V3 sport (daily activity rollup) received — mapping deferred")
+        // V3 daily activity rollup → WatchActivityDay. This V3-only watch never fires the v2
+        // onGetActivityData, so HealthSportV3's day totals are THE source of daily steps/distance/
+        // calories. We map the day totals (the per-minute `items` buckets are ignored) and reuse the
+        // existing activityDays upload path. Skip empty/sentinel days.
+        override fun onGetHealthSportV3Data(data: HealthSportV3?) {
+            if (data == null || data.year == 0) return
+            if (data.total_step <= 0L && data.total_distances <= 0 && data.total_activity_calories <= 0) return
+            listener?.onActivityDay(data.toActivityDay())
         }
+
+        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, BP V3,
+        // body composition, noise, pressure, swimming, ECG, emotion-health. ──
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
         override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
@@ -504,6 +541,27 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // domain model + dashboard schema gain those columns (W6/W5).
     )
 
+    private fun HealthSportV3.toActivityDay() = WatchActivityDay(
+        date = ymd(year, month, day),
+        steps = total_step.toInt().nonZero(),
+        distanceMeters = total_distances.nonZero(),
+        // Active calories for the day. `total_rest_activity_calories` (resting burn) is reported
+        // separately; the dashboard's single `calories` column tracks the active total. Exact
+        // semantics + the `total_active_time` unit are on-device-verifiable (W6 timestamp caveat).
+        calories = total_activity_calories.nonZero(),
+        durationSeconds = total_active_time.nonZero(),
+        // HealthSportV3 carries no HR summary or zone minutes (those live on v2 HealthActivity /
+        // HealthHeartRate, which this device doesn't emit) — leave null.
+        avgHeartRate = null,
+        maxHeartRate = null,
+        minHeartRate = null,
+        warmUpMins = null,
+        burnFatMins = null,
+        aerobicMins = null,
+        anaerobicMins = null,
+        limitMins = null,
+    )
+
     private fun HealthActivityV3.toWorkout() = WatchWorkout(
         startDateTime = ymdhms(year, month, day, hour, minute, second),
         endDateTime = ymdhms(end_year, end_month, end_day, end_hour, end_minute, end_sec),
@@ -539,9 +597,6 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
-
-        /** Debug-only auto-connect target (the Active 4 Pro MAC). Null disables the scaffold. */
-        val DEBUG_AUTO_CONNECT_MAC: String? = "F4:91:29:51:C6:45"
 
         /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
         fun Int.nonZero(): Int? = if (this != 0) this else null

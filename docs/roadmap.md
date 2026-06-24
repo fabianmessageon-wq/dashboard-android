@@ -42,7 +42,7 @@ Watch slices (new ladder):
 | W3 — On-device: SDK init + scan + connect + **bind** | ✅ **verified on Galaxy S21 / Android 14** (bind persists, `bound=true`) |
 | W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ✅ **data flows on device** via VeryFit's `syncAllData(SyncPara)` orchestration — `status = 3` NAK fixed by syncing sequentially. Watch streams real data; `SyncV3HealthTask onSuccess`. (Run still ends `ERROR_SYNC_TASK_FAILED` from a benign post-transfer conn-param step — data already delivered.) |
 | W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health` (+ dashboard route/schema) | ✅ **code-complete both halves** — Android upload layer (DTOs + client + repository + `UploadingWatchHealthListener` + `ServiceLocator` wiring; `compileDebugKotlin`/`testDebugUnitTest` green) and dashboard `POST /watch/health` route + workout `(user, started_at)` unique constraint on `schema/watch-health-metrics` (`tsc` clean). Idempotent upserts (day=user+date, workout=user+startedAt). **Pending deploy:** merge `schema/watch-health-metrics` → run `drizzle-kit push` → deploy, so the route exists server-side (the app degrades quietly with 404 until then). |
-| W6 — V3 metrics via `ISyncDataListener` V3 callbacks | 🔶 **mostly done** — `HealthSleepV3`→`WatchSleepSession`, `HealthActivityV3`→`WatchWorkout`, **and the five intraday point metrics now mapped end-to-end**: `HealthSpO2`→`WatchSpo2Reading`, `HealthHRVdata`→`WatchHrvReading` (→ `watch_stress_readings.hrv_ms`), `HealthRespiratoryRate`→`WatchRespiratoryReading`, `HealthTemperature`→`WatchTemperatureReading` (raw centi-°C ÷100), `HealthBodyPower`→`WatchBodyEnergyReading` (new `watch_body_energy_readings` table). Each emits one domain reading per item with a resolved wall-clock `recordedAt`; upload batch + DTOs + `/watch/health` upserts (idempotent on `(user, recordedAt)`) all wired. `compileDebugKotlin` + `testDebugUnitTest` (new `WatchHealthMappingTest`) green; dashboard `tsc` clean in `src/`. **Still logged-only:** `HealthSportV3` (per-minute daily activity rollup — distinct from the workout sessions), BP V3, body composition, noise, pressure, swimming, ECG, emotion-health. **Timestamp caveat:** within-day offsets use the IDO minute-of-day convention (temperature uses its own `time_offset_unit`); the `date` prefix is always exact, so the unit is confirmable on-device without risking daily rollups. |
+| W6 — V3 metrics via `ISyncDataListener` V3 callbacks | 🔶 **mostly done** — `HealthSleepV3`→`WatchSleepSession`, `HealthActivityV3`→`WatchWorkout`, **and the five intraday point metrics now mapped end-to-end**: `HealthSpO2`→`WatchSpo2Reading`, `HealthHRVdata`→`WatchHrvReading` (→ `watch_stress_readings.hrv_ms`), `HealthRespiratoryRate`→`WatchRespiratoryReading`, `HealthTemperature`→`WatchTemperatureReading` (raw centi-°C ÷100), `HealthBodyPower`→`WatchBodyEnergyReading` (new `watch_body_energy_readings` table). Each emits one domain reading per item with a resolved wall-clock `recordedAt`; upload batch + DTOs + `/watch/health` upserts (idempotent on `(user, recordedAt)`) all wired. `compileDebugKotlin` + `testDebugUnitTest` (new `WatchHealthMappingTest`) green; dashboard `tsc` clean in `src/`. **`HealthSportV3`→`WatchActivityDay` now mapped too** — this V3-only watch never fires the v2 `onGetActivityData`, so the V3 sport rollup's day totals (`total_step`/`total_distances`/`total_activity_calories`/`total_active_time`) are the source of daily steps/distance/calories; reuses the existing `activityDays` upload + `watch_activity_days` `(user,date)` upsert (no schema change). Per-minute `items` ignored; HR/zone fields null (absent on this type). **Still logged-only:** BP V3, body composition, noise, pressure, swimming, ECG, emotion-health. **Timestamp caveat:** within-day offsets use the IDO minute-of-day convention (temperature uses its own `time_offset_unit`); the `date` prefix is always exact, so the unit is confirmable on-device without risking daily rollups. |
 | W7 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
 | W8 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
 
@@ -116,9 +116,38 @@ only because the UI/worker stayed idle. **Planned:** point the Watch UI + `Watch
   the deliberately minimal `WatchEngine` (`init/connect/disconnect/isConnected/syncHealth` +
   `WatchHealthListener`). Repointing means building a **new product Watch screen** (connection state
   + synced health) and deciding whether to keep the debug console as a dev-only tool.
-- `WatchEngine` exposes **no connection-state `StateFlow`** yet — the UI needs one. First, additive
-  step: add `connectionState: StateFlow<…>` to the interface and emit it from `IdoSdkWatchEngine`'s
-  scan/connect/bind/sync callbacks.
+- ~~`WatchEngine` exposes **no connection-state `StateFlow`** yet~~ — ✅ **done (first additive
+  step).** Added `enum WatchEngineConnectionState` (`DISCONNECTED / SCANNING / CONNECTING / BINDING /
+  AWAITING_WATCH_CONFIRMATION / CONNECTED / SYNCING`) + `connectionState: StateFlow<…>` on the
+  `WatchEngine` interface; `IdoSdkWatchEngine` backs it with a `MutableStateFlow` and emits at every
+  lifecycle point (connect→SCANNING, scan-match/onConnectStart→CONNECTING, onConnectSuccess→
+  CONNECTED|BINDING, bind onNeedAuth→AWAITING_WATCH_CONFIRMATION, bind onSuccess→CONNECTED,
+  startSync→SYNCING, sync end→CONNECTED-if-still-linked, all failures/disconnect→DISCONNECTED). The
+  state type is engine-agnostic (carries no transport detail — distinct from the clean-room
+  `ble.WatchConnectionState`). Additive only; `compileDebugKotlin` + `testDebugUnitTest` green.
+- ✅ **Product Watch screen built + wired into the nav.** New `WatchHealthScreen` +
+  `WatchHealthViewModel` (`ui/watch/`) drive the `WatchEngine` (vendored-SDK engine) instead of
+  `WatchBleManager`: requests BLE permissions, renders `connectionState` (Disconnected → Searching →
+  Connecting → Pairing → Confirm-on-watch → Connected → Syncing), and offers Connect / Disconnect /
+  Sync-now. A new `CompositeWatchHealthListener` fans the engine's single listener slot to the
+  uploader **and** a UI listener (registered via `ServiceLocator.watchUiListener`) so the screen
+  tallies per-metric record counts each sync and shows a "Last sync" summary (counts persist even on
+  the benign end-of-run failure). The `MainActivity` Watch tab now points here; the clean-room debug
+  console (`WatchScreen`/`WatchViewModel`) is **retained but unreferenced** for a future hidden dev
+  entry. `assembleDebug` + `testDebugUnitTest` green (new `WatchHealthViewModelTest`, 6 cases).
+- ✅ **`WatchSyncWorker` repointed onto the engine + debug auto-connect scaffold retired.** The
+  background worker no longer uploads battery/MTU telemetry via `WatchBleManager`; it now drives a
+  **health** sync through the `WatchEngine` (`connect` → auto (re)bind+sync → await one run via the
+  `connectionState` flow → `disconnect`), and the engine's upload listener pushes the records. It
+  no-ops when unconfigured **or when the engine is already busy** (so the foreground UI and the
+  worker never contend for the one GATT link), and times out + succeeds if the watch is out of range.
+  `ServiceLocator` no longer wires `WatchBleManager.onConnectionEvent` to the worker (that would put
+  both BLE stacks on the watch at once). `IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC` and its
+  postDelayed scaffold are deleted now the UI/worker drive connect. `assembleDebug` +
+  `testDebugUnitTest` green. **On-device unverified:** background BLE connect/sync from a Worker and
+  the busy-guard need a hardware pass. On-device verification is now Watch tab → **Connect** (no more
+  auto-connect on launch). **Still open:** optionally surface a hidden entry to the retained debug
+  console; source `deviceId` from the connected device once multi-watch matters.
 - `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
   Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
   worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold
@@ -128,8 +157,9 @@ Operational notes for the next session:
 - ADB is wireless: `192.168.20.100:40367` (rediscover via `adb mdns services` if dropped; do
   **not** run `adb usb` — it drops the wireless link).
 - Force-stop VeryFit (`com.watch.life`) before testing; grant `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT`.
-- A debug auto-connect scaffold (`IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC`) fires connect+sync
-  ~4s after launch; remove it once the Watch screen drives connect/sync via the `WatchEngine`.
+- The debug auto-connect scaffold is **gone** — open the **Watch tab → Connect** to drive
+  connect/(re)bind/sync via the `WatchEngine`; the new screen shows the live lifecycle + per-sync
+  record counts. (`WatchSyncWorker` also drives a background health sync every 6h / on `syncNow`.)
 - The watch is now **bound to our app** — VeryFit will need re-pairing (reopen it) if you want it back.
 
 ### Superseded clean-room direction (pre-2026-06-24, kept for reference)

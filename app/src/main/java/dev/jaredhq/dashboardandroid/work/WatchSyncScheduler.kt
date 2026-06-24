@@ -11,16 +11,15 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Schedules [WatchSyncWorker]. Two cadences:
+ * Schedules [WatchSyncWorker] (a background watch **health** sync via the WatchEngine). Two cadences:
  *
- *  - [ensureScheduled]: a calm 6-hour periodic refresh, so battery/MTU telemetry
- *    trickles up even if the user never reopens the Watch tab.
- *  - [syncNow]: a one-off, fired on connection events and from the manual "Sync"
- *    button. Uses [ExistingWorkPolicy.REPLACE] so rapid connect/disconnect churn
- *    coalesces into a single upload of the latest state rather than a backlog.
+ *  - [ensureScheduled]: a calm 6-hour periodic sync, so health data trickles up even if the user
+ *    never reopens the Watch tab.
+ *  - [syncNow]: a one-off manual trigger. Uses [ExistingWorkPolicy.REPLACE] so repeated taps
+ *    coalesce into a single run.
  *
- * Both require network connectivity; the worker itself no-ops when the app isn't
- * configured, so scheduling is always safe.
+ * Both require network connectivity; the worker itself no-ops when the app isn't configured or the
+ * engine is already busy, so scheduling is always safe.
  */
 object WatchSyncScheduler {
 
@@ -42,7 +41,7 @@ object WatchSyncScheduler {
         )
     }
 
-    /** Trigger an immediate one-off telemetry upload (connection event / manual). */
+    /** Trigger an immediate one-off background health sync. */
     fun syncNow(context: Context) {
         WorkManager.getInstance(context).enqueueUniqueWork(
             WatchSyncWorker.WORK_NAME,

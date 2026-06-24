@@ -3,22 +3,24 @@ package dev.jaredhq.dashboardandroid.work
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import dev.jaredhq.dashboardandroid.data.api.ApiException
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
+import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Uploads the current watch connection/device telemetry to the dashboard
- * (Phase 2 — "safe dashboard metrics"; no health data).
+ * Background health sync: connects to the watch via the [WatchEngine] boundary and lets a full
+ * sync run, so health data trickles up even if the user never opens the Watch tab.
  *
- * Triggered two ways (see [WatchSyncScheduler]):
- *  - one-off on every meaningful connection event (connect / disconnect), so the
- *    dashboard's connection history stays current, and
- *  - periodically, to refresh battery/MTU while a connection persists.
+ * This replaces the old Phase-2 telemetry upload (battery/MTU via `WatchBleManager`). The engine's
+ * connect path auto-runs the sync after (re)bind, and the engine's own upload listener
+ * (`UploadingWatchHealthListener`) pushes the decoded records to the dashboard and owns upload
+ * retry — so this worker only has to drive the connection and wait for the run to finish.
  *
- * Degrades quietly: if the app isn't configured (no base URL/token) or there is
- * no identifiable device yet, it just succeeds — there is nothing to send. A
- * transient network/5xx failure asks WorkManager to retry with backoff; an auth
- * failure won't fix itself on retry, so it is treated as success.
+ * Degrades quietly: no-ops when the app isn't configured, or when the engine is already busy
+ * (the foreground UI is driving the same watch — the two must not contend for one GATT link). If
+ * the watch isn't reachable it simply times out and succeeds; the next period tries again.
  */
 class WatchSyncWorker(
     context: Context,
@@ -33,20 +35,37 @@ class WatchSyncWorker(
             !ServiceLocator.settings.tokenSnapshot().isNullOrBlank()
         if (!configured) return Result.success()
 
-        // No identifiable device (idle, or a bare scan) — nothing to report.
-        val request = ServiceLocator.watchBleManager.buildSyncRequest() ?: return Result.success()
+        val engine = ServiceLocator.watchEngine
+        // Don't fight the foreground UI for the single GATT link to the watch.
+        if (engine.connectionState.value != WatchEngineConnectionState.DISCONNECTED) {
+            return Result.success()
+        }
 
-        val result = ServiceLocator.repository.syncWatch(request)
-        return if (isTransient(result)) Result.retry() else Result.success()
-    }
+        // connect() drives scan → connect → (re)bind → sync; we wait until one sync run has
+        // finished (state returns from SYNCING to CONNECTED, or the link drops). A watch that's
+        // out of range never reaches SYNCING and falls through to the timeout.
+        withTimeoutOrNull(SYNC_TIMEOUT_MS) {
+            engine.connect(ServiceLocator.watchDeviceId)
+            var sawSyncing = false
+            engine.connectionState
+                .onEach { if (it == WatchEngineConnectionState.SYNCING) sawSyncing = true }
+                .first { state ->
+                    sawSyncing && (
+                        state == WatchEngineConnectionState.CONNECTED ||
+                            state == WatchEngineConnectionState.DISCONNECTED
+                        )
+                }
+        }
 
-    private fun isTransient(result: kotlin.Result<*>): Boolean {
-        val api = result.exceptionOrNull() as? ApiException ?: return false
-        if (api.isAuthError) return false
-        return api.status == 0 || api.status in 500..599
+        // Release the link so it can't linger and contend with the UI on the next foreground use.
+        engine.disconnect()
+        return Result.success()
     }
 
     companion object {
         const val WORK_NAME = "watch-sync"
+
+        /** Budget for connect + (re)bind + a full sync run; well under WorkManager's 10-min cap. */
+        private const val SYNC_TIMEOUT_MS = 6 * 60 * 1000L
     }
 }
