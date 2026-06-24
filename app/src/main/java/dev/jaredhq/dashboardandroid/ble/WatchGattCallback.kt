@@ -450,6 +450,12 @@ class WatchGattCallback(
                         "ACTIVITY",
                         "Activity buffer complete (${buffer.size} bytes): ${WatchProtocol.describeActivityVersion(version)}",
                     )
+                    // Phase 3: decode the summary header only when the version is supported.
+                    // Unsupported/empty buffers fall through non-fatally (logged above). The
+                    // decoded summary is REFERENCE_ONLY and log-only — never uploaded/persisted.
+                    WatchProtocol.parseActivitySummary(buffer)?.let { summary ->
+                        packetLogger.log("ACTIVITY", summary.describe())
+                    }
                 } else {
                     packetLogger.log(
                         "ACTIVITY",
