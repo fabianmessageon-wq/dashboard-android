@@ -40,9 +40,9 @@ Watch slices (new ladder):
 | W1 — Vendor SDK jar (targeted 4,511-class slice) + native libs + Gradle (greenDAO/gson) | ✅ done, `assembleDebug` green |
 | W2 — `WatchEngine` boundary + `IdoSdkWatchEngine` (v2 activity/HR/sleep mapping) | ✅ done, `compileDebugKotlin` green |
 | W3 — On-device: SDK init + scan + connect + **bind** | ✅ **verified on Galaxy S21 / Android 14** (bind persists, `bound=true`) |
-| W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ⚠ function-table fix **verified on device** (`onGetFunctionTable cached=true`); sync still fails — new blocker: device NAKs bulk-sync commands with `status = 3`. See "current blockers" |
-| W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ after W4 |
-| W6 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `SyncV3CallBack` | later |
+| W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ✅ **data flows on device** via VeryFit's `syncAllData(SyncPara)` orchestration — `status = 3` NAK fixed by syncing sequentially. Watch streams real data; `SyncV3HealthTask onSuccess`. (Run still ends `ERROR_SYNC_TASK_FAILED` from a benign post-transfer conn-param step — data already delivered.) |
+| W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ next |
+| W6 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `ISyncDataListener` V3 callbacks | ▶ **promoted — this watch is V3-only for health** (see blockers) |
 | W7 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
 | W8 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
 
@@ -61,31 +61,38 @@ persisted across launches).
    — crucially — **encryption is not required by this watch**: the `SupportFunctionInfo` JSON has
    `BindAuth=false`, `*_encrypted_auth=false`, `support_send_encrypted_data_with_bind=false`, and
    the device is `not ContainEncryptCharacteristic`. So the encrypted handshake was never the gate.
-2. **NEW REAL BLOCKER — device rejects the bulk-sync pull commands with `status = 3`.** With the
-   link up (`BluetoothGatt onConnectionUpdated … status=0`, stays connected) and the function
-   table cached, the **control** commands succeed (set-time `03 01 …`, get `02 f4`) but the
-   **data-pull** writes fail and retry for ~12 s until timeout:
-   - `[APP_SEND_DATA] send => 09 06 01 00` (health) → `onDeviceResponseOnLastSend[failed]( 09 06 01 00 ) , status = 3`
-   - `[APP_SEND_DATA] send => 08 01 01 00` (activity) → `…[failed]( 08 01 01 00 ) , status = 3`
-   - …repeating, then `[SYNC_DATA] sync health data failed!` and `… sync activity data failed!`.
-   `status` originates in `BytesDataConnect` (`com.ido.ble.bluetooth.connect.inkwell`); 0 = ok,
-   nonzero = device/transport rejection (not yet pinned: GATT write status vs. parsed response code).
-   **The old manual stack did NOT run during this test** (no `WatchBleManager`/`WatchGattCallback`
-   log lines), so this is not cross-stack interference — it's the SDK's own sync path.
-
-   **Leading hypotheses / next experiments (cheapest first):**
-   - **Concurrent sync collision.** `syncHealth()` fires `startSyncActivityData()` **and**
-     `startSyncHealthData()` back-to-back; their commands (`08…`/`09…`) interleave and both NAK.
-     Try **sequential** sync — health first, then activity from the health `onSuccess`/`onStop`.
-   - **Missing pre-sync config push.** VeryFit likely runs `startSyncConfigInfo()` and/or pushes
-     user info after bind before the watch releases health data. Extract VeryFit's real post-bind
-     order from the decompiled app and mirror it.
-   - Pin the exact meaning of `status = 3` (find the GATT write callback / response parser that
-     feeds `inkwell.basilisk(byte[], int)`).
-3. **Connection instability (dual-mode)** — previously seen `onConnectSuccess` firing repeatedly
-   as the watch's Classic BR/EDR profiles re-attach. **Not reproduced in this test** (single clean
-   `onConnectSuccess`, link stable), so deprioritised behind the `status = 3` blocker. Kept for
-   reference: SPP-priority (`isSppPriority`/`connectBT`) or suppressing Classic profiles during sync.
+2. **`status = 3` bulk-sync NAK — ✅ FIXED (2026-06-24).** Root cause: `syncHealth()` fired
+   `startSyncActivityData()` **and** `startSyncHealthData()` back-to-back; the `08…`/`09…` data-pull
+   commands interleaved on the single command channel and the watch NAK'd both with `status = 3`
+   for ~12 s until timeout. **Fix:** drive the *orchestrated, sequential* sync the stock VeryFit app
+   uses — `BLEManager.syncAllData(SyncPara)` (`DeviceManagerPresenter` /
+   `BaseHomeFragmentPresenter`), which runs config → health → activity → V3 as ordered tasks and
+   delivers data via `SyncPara.iSyncDataListener` (`ISyncDataListener`). `IdoSdkWatchEngine` now
+   calls `syncAllData` (`isNeedSyncConfigData=false`, timeout 300 s) and implements
+   `ISyncDataListener` + `ISyncProgressListener`; the direct `CallBackManager`
+   `registerSyncActivity/HealthCallBack` registrations were removed (the tasks register their own
+   internally and forward to our listener — keeping ours too double-delivers). **On-device result:**
+   no more `status = 3`; the watch streamed a full workout (steps/HR/pace), multiple sleep + sport
+   sessions, respiratory rate, body power, HRV; `SyncV3HealthTask onSuccess / finished`.
+3. **This watch is V3-only for health (key finding).** The data arrives through the **V3**
+   callbacks — `handleActivityV3Data` / `handleHealthSleepV3Data` / `handleHealthSportV3Data` /
+   `handleHRVData` / `handleRespiratoryRateData` / `handleBodyPowerData` — i.e.
+   `ISyncDataListener.onGetHealthActivityV3Data` etc., **not** the v2 `onGetActivityData/HeartRate/
+   Sleep` we currently map. Those V3 methods are no-op sinks right now, so the app receives the sync
+   but **captures nothing yet**. → **W6 (V3 mapping) is the real data-capture path for this device,
+   promoted ahead of the v2 work.** Map `HealthActivityV3` (steps/HR/calories/distance/pace),
+   `HealthSleepV3`, `HealthSportV3` (workouts), and the standalone metrics (HRV, respiratory, body
+   power, SpO2, temperature) to domain, persisting **incrementally as each record arrives** (so the
+   benign end-of-run failure below never costs data).
+4. **Residual `ERROR_SYNC_TASK_FAILED` is benign.** After `SyncV3HealthTask onSuccess`, the SDK
+   restores the BLE interval to slow (`setTransferSpeedToSlowForEnd`); the watch's conn-param reply
+   returns `errorCode=17` ("unsupported remote feature"), it retries to max
+   (`set slow transfer mode out of max times for end`), and *that* marks the whole run failed — a
+   false-negative; **all data is delivered before it.** Likely the same DUAL-mode/Classic-profile
+   contention noted before. Mitigation options: persist V3 data incrementally (above) so onFailed is
+   harmless; or investigate suppressing Classic profiles / SPP-priority to stabilise conn-param
+   updates. Also seen but non-blocking: `sync config failed!13` (now skipped via
+   `isNeedSyncConfigData=false`).
 
 ### ⚠ Two BLE stacks coexist (interference risk + planned UI rework)
 
@@ -101,6 +108,21 @@ run at once (a likely aggravator of the dual-mode instability). They didn't coll
 only because the UI/worker stayed idle. **Planned:** point the Watch UI + `WatchSyncWorker` at the
 `WatchEngine` interface and retire `WatchBleManager` (or keep it solely as the future
 `CleanRoomWatchEngine` behind the same interface). Until then, avoid driving both in one session.
+
+**Scoping (2026-06-24) — this is a redesign, not a repoint:**
+- The current **Watch screen** (`WatchViewModel` + `WatchScreen`) is a **clean-room BLE debug
+  console** bound to `WatchBleManager`'s raw-packet `logger`, `sendDebugHexCommand`, and manual
+  probes (`requestMacAddress/DeviceInfo/BatteryInfo`, `requestActivitySync`). None of that maps onto
+  the deliberately minimal `WatchEngine` (`init/connect/disconnect/isConnected/syncHealth` +
+  `WatchHealthListener`). Repointing means building a **new product Watch screen** (connection state
+  + synced health) and deciding whether to keep the debug console as a dev-only tool.
+- `WatchEngine` exposes **no connection-state `StateFlow`** yet — the UI needs one. First, additive
+  step: add `connectionState: StateFlow<…>` to the interface and emit it from `IdoSdkWatchEngine`'s
+  scan/connect/bind/sync callbacks.
+- `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
+  Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
+  worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold
+  the worker rework into W5: replace the telemetry upload with the health-upload path.
 
 Operational notes for the next session:
 - ADB is wireless: `192.168.20.100:40367` (rediscover via `adb mdns services` if dropped; do
