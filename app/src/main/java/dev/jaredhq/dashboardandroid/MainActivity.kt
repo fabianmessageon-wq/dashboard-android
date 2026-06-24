@@ -45,9 +45,8 @@ import dev.jaredhq.dashboardandroid.ui.settings.SettingsViewModel
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
-import dev.jaredhq.dashboardandroid.ui.watch.WatchScreen
-import dev.jaredhq.dashboardandroid.ui.watch.WatchViewModel
-import dev.jaredhq.dashboardandroid.work.WatchSyncScheduler
+import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthScreen
+import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
 
 class MainActivity : ComponentActivity() {
 
@@ -225,25 +224,16 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                 )
             }
             composable(Tab.Watch.route) {
-                val vm: WatchViewModel = viewModel(factory = factory)
+                // Product Watch screen, driven by the WatchEngine boundary (vendored-SDK engine).
+                // The clean-room BLE debug console (WatchScreen/WatchViewModel) is retained for a
+                // future hidden dev entry point and no longer wired into the nav graph.
+                val vm: WatchHealthViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
-                val context = LocalContext.current
-                WatchScreen(
+                WatchHealthScreen(
                     state = state,
-                    onScanClick = vm::startScan,
-                    onDisconnectClick = vm::disconnect,
-                    onMacRequest = vm::requestMacAddress,
-                    onDeviceInfoRequest = vm::requestDeviceInfo,
-                    onBatteryInfoRequest = vm::requestBatteryInfo,
-                    onCapturedStatusProbe = vm::requestCapturedStatusProbe,
-                    onActivitySyncRequest = vm::requestActivitySync,
-                    onRawCommandChange = vm::onRawCommandHexChange,
-                    onRawCommandSend = vm::sendRawCommand,
-                    onSyncClick = {
-                        WatchSyncScheduler.syncNow(context)
-                        vm.onSyncRequested()
-                    },
-                    onClearLog = vm::clearLog,
+                    onConnect = vm::connect,
+                    onDisconnect = vm::disconnect,
+                    onSync = vm::syncNow,
                     onPermissionsGranted = vm::onPermissionsGranted,
                     onPermissionsDenied = vm::onPermissionsDenied,
                 )

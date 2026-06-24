@@ -124,9 +124,21 @@ only because the UI/worker stayed idle. **Planned:** point the Watch UI + `Watch
   CONNECTED|BINDING, bind onNeedAuth→AWAITING_WATCH_CONFIRMATION, bind onSuccess→CONNECTED,
   startSync→SYNCING, sync end→CONNECTED-if-still-linked, all failures/disconnect→DISCONNECTED). The
   state type is engine-agnostic (carries no transport detail — distinct from the clean-room
-  `ble.WatchConnectionState`). Additive only; `compileDebugKotlin` + `testDebugUnitTest` green. **Next
-  here:** build the new product Watch screen that collects this flow + drives `connect`/`syncHealth`,
-  then retire the debug-auto-connect scaffold.
+  `ble.WatchConnectionState`). Additive only; `compileDebugKotlin` + `testDebugUnitTest` green.
+- ✅ **Product Watch screen built + wired into the nav.** New `WatchHealthScreen` +
+  `WatchHealthViewModel` (`ui/watch/`) drive the `WatchEngine` (vendored-SDK engine) instead of
+  `WatchBleManager`: requests BLE permissions, renders `connectionState` (Disconnected → Searching →
+  Connecting → Pairing → Confirm-on-watch → Connected → Syncing), and offers Connect / Disconnect /
+  Sync-now. A new `CompositeWatchHealthListener` fans the engine's single listener slot to the
+  uploader **and** a UI listener (registered via `ServiceLocator.watchUiListener`) so the screen
+  tallies per-metric record counts each sync and shows a "Last sync" summary (counts persist even on
+  the benign end-of-run failure). The `MainActivity` Watch tab now points here; the clean-room debug
+  console (`WatchScreen`/`WatchViewModel`) is **retained but unreferenced** for a future hidden dev
+  entry. `assembleDebug` + `testDebugUnitTest` green (new `WatchHealthViewModelTest`, 6 cases).
+  **Next here:** (1) retire `IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC` now the screen drives connect
+  (kept for now so on-device the new UI passively shows the auto-connect lifecycle); (2) repoint
+  `WatchSyncWorker` off `WatchBleManager` onto the engine's health-upload path (folds into W5);
+  (3) optionally surface a hidden entry to the debug console.
 - `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
   Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
   worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold
