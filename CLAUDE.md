@@ -247,6 +247,15 @@ Do not overbuild this phase for broad smartwatch compatibility, consumer onboard
 
 ## BLE implementation strategy
 
+> **⚠ Scoped exception in force (2026-06-24, ADR 0001).** For the **private build**, Fabian
+> explicitly approved **vendoring the IDO/VeryFit SDK** (`app/libs/ido-watch-sdk.jar` +
+> `jniLibs/*.so`) as a runtime dependency — the override the "Reference-guided backend rule"
+> below reserves for his approval. The SDK is quarantined behind the `WatchEngine` interface
+> (`IdoSdkWatchEngine` is the only file that may import `com.ido.*` / `com.veryfit.*`); the
+> clean-room rule below still governs **all other code** and remains the long-term target
+> (`CleanRoomWatchEngine`). See [`docs/adr/0001-vendor-ido-sdk.md`](docs/adr/0001-vendor-ido-sdk.md).
+> Revisit before any distribution — this approval is private-build-only.
+
 ### Reference-guided backend rule
 
 The project direction is **not** to copy proprietary backend source code from VeryFit or other APKs into this repository. Reference apps may be inspected as architecture/protocol documentation only.

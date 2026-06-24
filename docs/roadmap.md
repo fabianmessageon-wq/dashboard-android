@@ -21,9 +21,33 @@ ready (`PayloadMappingTest`, `RepositoryTest`, `BaseUrlNormalizationTest`,
 `./gradlew testDebugUnitTest` → `assembleDebug`, resolving any AGP/Kotlin/
 Compose-BOM version skew the local SDK surfaces. See README "Verification status".
 
-## Next (not yet built)
+## Watch / Active 4 Pro — direction changed (2026-06-24): vendored-SDK, hybrid
 
-- **Watch / Active 4 Pro private build** — current direction is Fabian-private first, not commercial/general-user polish. The `0x02` status/identity path is watch-verified and `ble-stability-ready-lifecycle` has added ready-gated writes, serialized command queueing, hardened notification setup, and strict `02 01` basic-info parsing. Next milestone: validate this lifecycle on Fabian's real phone/watch, then implement `33 DA AD` activity buffer reassembly only. See [`docs/plans/ble-master-plan.md`](plans/ble-master-plan.md).
+> **Pivot.** The watch integration moved from *clean-room first* to **hybrid: vendor the
+> IDO/VeryFit SDK now, clean-room high-value paths later** (health-first, private-only). The
+> decompiled APK proved the real wire protocol lives in native libs, so lifting the SDK gets
+> full watch functionality fast while the native lib does all framing/parsing. The earlier
+> clean-room phase ladder below (and in the BLE plan docs) is **superseded, not deleted** — the
+> clean-room code is retained as `CleanRoomWatchEngine`, the future independent path.
+> Canonical record: [`docs/adr/0001-vendor-ido-sdk.md`](adr/0001-vendor-ido-sdk.md).
+> Baseline before the pivot: git tag `pre-ido-sdk-baseline`.
+
+Watch slices (new ladder):
+
+| Slice | State |
+|-------|-------|
+| W0 — Checkpoint: tag `pre-ido-sdk-baseline` + ADR 0001 | ✅ done |
+| W1 — Vendor SDK: `ido-watch-sdk.jar` + native libs + Gradle wiring (greenDAO/gson) | ✅ done, `assembleDebug` green |
+| W2 — `WatchEngine` boundary + `IdoSdkWatchEngine` (v2 activity/HR/sleep mapping) | ✅ done, `compileDebugKotlin` green |
+| W3 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ next |
+| W4 — Hardware verify on Fabian's phone (VeryFit force-stopped): init → connect → sync → steps/HR/sleep | ▶ needs device |
+| W5 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `SyncV3CallBack` | later |
+| W6 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
+| W7 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
+
+### Superseded clean-room direction (pre-2026-06-24, kept for reference)
+
+- ~~**Watch / Active 4 Pro private build (clean-room)**~~ — the `0x02` status/identity path is watch-verified and `ble-stability-ready-lifecycle` added ready-gated writes, serialized command queueing, hardened notification setup, and strict `02 01` basic-info parsing; `33 DA AD` activity reassembly + summary decode landed too. This code is retained as the clean-room engine + protocol oracle. See [`docs/plans/ble-master-plan.md`](plans/ble-master-plan.md) (now banner-headed with the pivot).
 - **Phone app improvements plan** —
   [`docs/plans/phone-app-improvements.md`](plans/phone-app-improvements.md).
   **Dashboard side: ✅ implemented** (task In Progress state + visible chip;
