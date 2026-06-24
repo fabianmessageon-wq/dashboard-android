@@ -6,6 +6,7 @@ import com.ido.ble.BLEManager
 import com.ido.ble.InitParam
 import com.ido.ble.bluetooth.connect.ConnectFailedReason
 import com.ido.ble.bluetooth.device.BLEDevice
+import com.ido.ble.callback.BaseGetDeviceInfoCallBack
 import com.ido.ble.callback.BindCallBack
 import com.ido.ble.callback.CallBackManager
 import com.ido.ble.callback.ConnectCallBack
@@ -20,6 +21,7 @@ import com.ido.ble.data.manage.database.HealthSleep
 import com.ido.ble.data.manage.database.HealthSleepItem
 import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
+import com.ido.ble.protocol.model.SupportFunctionInfo
 
 /**
  * [WatchEngine] backed by the vendored IDO/VeryFit SDK (ADR 0001).
@@ -84,15 +86,28 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     @Volatile
     private var targetMac: String? = null
 
+    // The SDK's post-connect "encrypted handshake" (encryptedAtConnectedIfFunctionInfoIsNull)
+    // needs the device function/capability table; a fresh SDK DB lacks it and sync fails with
+    // "supportFunctionInfo is null". We fetch it via getFunctionTables() once per connected
+    // session and only sync after onGetFunctionTable caches it. (Roadmap W4 / ADR 0001.)
+    @Volatile
+    private var functionTableCached = false
+
+    @Volatile
+    private var pendingSyncAfterFunctionTable = false
+
     override fun connect(macAddress: String) {
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
         targetMac = macAddress.uppercase()
+        functionTableCached = false
         Log.i(TAG, "connect($macAddress) → scanning to find + bind")
         BLEManager.startScanDevices()
     }
 
     override fun disconnect() {
+        functionTableCached = false
+        pendingSyncAfterFunctionTable = false
         BLEManager.disConnect()
     }
 
@@ -104,6 +119,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onSyncFailed()
             return
         }
+        if (!functionTableCached) {
+            // Without the device function table the encrypted handshake fails; fetch it first
+            // and resume the sync from onGetFunctionTable below.
+            Log.i(TAG, "function table not cached → getFunctionTables() before sync")
+            pendingSyncAfterFunctionTable = true
+            BLEManager.getFunctionTables()
+            return
+        }
+        startSync()
+    }
+
+    private fun startSync() {
         Log.i(TAG, "starting health + activity sync")
         BLEManager.startSyncActivityData()
         BLEManager.startSyncHealthData()
@@ -114,6 +141,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerScanCallBack(scanCallBack)
         cm.registerConnectCallBack(connectCallBack)
         cm.registerBindCallBack(bindCallBack)
+        cm.registerGetDeviceInfoCallBack(deviceInfoCallBack)
         cm.registerSyncActivityCallBack(activityCallBack)
         cm.registerSyncHealthCallBack(healthCallBack)
         // NEXT: cm.registerSyncV3CallBack(v3CallBack) for SpO2/body-composition/stress/etc.
@@ -173,15 +201,20 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onSyncFailed()
         }
 
-        override fun onConnectBreak(mac: String?) { Log.w(TAG, "onConnectBreak $mac") }
+        override fun onConnectBreak(mac: String?) {
+            Log.w(TAG, "onConnectBreak $mac")
+            functionTableCached = false
+            pendingSyncAfterFunctionTable = false
+        }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
     }
 
     private val bindCallBack = object : BindCallBack.ICallBack {
         override fun onSuccess() {
-            Log.i(TAG, "BIND SUCCESS — watch claimed by our app; starting health sync")
+            Log.i(TAG, "BIND SUCCESS — watch claimed by our app; fetching function table then syncing")
             // Now that bind has actually completed, the device will release its data. Give the
-            // link a beat to settle (Classic profiles re-attach right after bind) then sync.
+            // link a beat to settle (Classic profiles re-attach right after bind), then syncHealth()
+            // which first pulls the function table (getFunctionTables) before the actual sync.
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ syncHealth() }, 1_500)
         }
         override fun onNeedAuth(code: Int) {
@@ -192,6 +225,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onFailed(error: BindCallBack.BindFailedError?) {
             Log.w(TAG, "bind FAILED: $error")
             listener?.onSyncFailed()
+        }
+    }
+
+    // ── Device info: function table gate ──────────────────────────────────────────────
+    // Extends BaseGetDeviceInfoCallBack (no-op defaults) so we only handle onGetFunctionTable.
+    private val deviceInfoCallBack = object : BaseGetDeviceInfoCallBack() {
+        override fun onGetFunctionTable(info: SupportFunctionInfo?) {
+            functionTableCached = info != null
+            Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
+            if (pendingSyncAfterFunctionTable) {
+                pendingSyncAfterFunctionTable = false
+                if (functionTableCached) {
+                    startSync()
+                } else {
+                    Log.w(TAG, "function table is null — cannot complete sync")
+                    listener?.onSyncFailed()
+                }
+            }
         }
     }
 

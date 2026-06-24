@@ -40,7 +40,7 @@ Watch slices (new ladder):
 | W1 — Vendor SDK jar (targeted 4,511-class slice) + native libs + Gradle (greenDAO/gson) | ✅ done, `assembleDebug` green |
 | W2 — `WatchEngine` boundary + `IdoSdkWatchEngine` (v2 activity/HR/sleep mapping) | ✅ done, `compileDebugKotlin` green |
 | W3 — On-device: SDK init + scan + connect + **bind** | ✅ **verified on Galaxy S21 / Android 14** (bind persists, `bound=true`) |
-| W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ⚠ blocked — see "current blockers" |
+| W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | 🔧 function-table fix implemented (`compileDebugKotlin` green) — awaiting on-device verification; see "current blockers" |
 | W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ after W4 |
 | W6 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `SyncV3CallBack` | later |
 | W7 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
@@ -55,9 +55,13 @@ the logs:
 
 1. **`supportFunctionInfo is null`** — the SDK's post-connect "encrypted handshake"
    (`encryptedAtConnectedIfFunctionInfoIsNull`) needs the device **function/capability table**,
-   which our fresh SDK DB lacks. **Next step:** call `BLEManager.getFunctionTables()` after
-   connect/bind, wait for its callback to cache the table, then trigger `startSyncHealthData()`.
-   Likely the primary blocker.
+   which our fresh SDK DB lacks. **✅ Fix implemented** (`IdoSdkWatchEngine`): `syncHealth()` now
+   gates on a `functionTableCached` flag — when the table isn't cached for the session it calls
+   `BLEManager.getFunctionTables()` and only runs `startSync*` from the
+   `GetDeviceInfoCallBack.onGetFunctionTable(SupportFunctionInfo)` callback (registered via
+   `CallBackManager`, reset on connect/disconnect/break). Compiles against the vendored jar;
+   **awaiting on-device confirmation** that `onGetFunctionTable` fires non-null and the sync
+   then completes. Likely the primary blocker.
 2. **Connection instability (dual-mode)** — `onConnectSuccess` fires repeatedly because the
    watch's Classic BR/EDR profiles (HID/Handsfree/Audio) re-attach within seconds and contend
    with the LE GATT link. A `cmd bluetooth_manager disable/enable` toggle clears it only briefly.
