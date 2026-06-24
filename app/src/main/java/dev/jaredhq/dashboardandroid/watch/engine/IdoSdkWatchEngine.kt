@@ -25,6 +25,7 @@ import com.ido.ble.data.manage.database.HealthSleepItem
 import com.ido.ble.data.manage.database.HealthSleepV3
 import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
+import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -446,12 +447,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             }
         }
 
-        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, V3 sport
-        // (a per-minute daily activity rollup, distinct from HealthActivityV3 workout sessions),
-        // BP V3, body composition, noise, pressure, swimming, ECG, emotion-health. ──
-        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {
-            if (data != null) Log.d(TAG, "V3 sport (daily activity rollup) received — mapping deferred")
+        // V3 daily activity rollup → WatchActivityDay. This V3-only watch never fires the v2
+        // onGetActivityData, so HealthSportV3's day totals are THE source of daily steps/distance/
+        // calories. We map the day totals (the per-minute `items` buckets are ignored) and reuse the
+        // existing activityDays upload path. Skip empty/sentinel days.
+        override fun onGetHealthSportV3Data(data: HealthSportV3?) {
+            if (data == null || data.year == 0) return
+            if (data.total_step <= 0L && data.total_distances <= 0 && data.total_activity_calories <= 0) return
+            listener?.onActivityDay(data.toActivityDay())
         }
+
+        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, BP V3,
+        // body composition, noise, pressure, swimming, ECG, emotion-health. ──
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
         override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
@@ -532,6 +539,27 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         sleepEndMinute = get_up_minte,   // SDK field spelling
         // NOTE: V3 also carries rem_mins/rem_count + sleep_avg_hr/spo2/respir — surfaced once the
         // domain model + dashboard schema gain those columns (W6/W5).
+    )
+
+    private fun HealthSportV3.toActivityDay() = WatchActivityDay(
+        date = ymd(year, month, day),
+        steps = total_step.toInt().nonZero(),
+        distanceMeters = total_distances.nonZero(),
+        // Active calories for the day. `total_rest_activity_calories` (resting burn) is reported
+        // separately; the dashboard's single `calories` column tracks the active total. Exact
+        // semantics + the `total_active_time` unit are on-device-verifiable (W6 timestamp caveat).
+        calories = total_activity_calories.nonZero(),
+        durationSeconds = total_active_time.nonZero(),
+        // HealthSportV3 carries no HR summary or zone minutes (those live on v2 HealthActivity /
+        // HealthHeartRate, which this device doesn't emit) — leave null.
+        avgHeartRate = null,
+        maxHeartRate = null,
+        minHeartRate = null,
+        warmUpMins = null,
+        burnFatMins = null,
+        aerobicMins = null,
+        anaerobicMins = null,
+        limitMins = null,
     )
 
     private fun HealthActivityV3.toWorkout() = WatchWorkout(
