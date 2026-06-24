@@ -333,25 +333,94 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onWorkout(data.toWorkout())
         }
 
-        // ── Remaining V3 metrics + GPS + drink plan: not yet mapped to domain (need new models /
-        // dashboard columns — W6). Logged so they're observable on-device; no-op sinks otherwise. ──
-        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {
-            if (data != null) Log.d(TAG, "V3 sport session received — mapping deferred (W6)")
+        // ── V3 intraday point metrics (SpO2 / HRV / respiratory / body energy / temperature) ──
+        // Each arrives as a parent day record + a list of within-day item samples; we emit one
+        // domain reading per item with a resolved wall-clock timestamp (see [localDateTime]).
+        // Zero/sentinel values and empty item lists are skipped.
+
+        override fun onGetHealthSpO2Data(
+            data: com.ido.ble.data.manage.database.HealthSpO2?,
+            items: MutableList<com.ido.ble.data.manage.database.HealthSpO2Item>?,
+            isLast: Boolean,
+        ) {
+            if (data == null || data.year == 0 || items.isNullOrEmpty()) return
+            items.forEach { item ->
+                if (item.value <= 0) return@forEach
+                // SpO2 item.offset is the sample's minute-of-day within the parent day.
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, item.offset * 60)
+                }.onSuccess { ts ->
+                    listener?.onSpo2Reading(WatchSpo2Reading(recordedAt = ts, percent = item.value))
+                }
+            }
         }
+
         override fun onGetHealthHRV(data: com.ido.ble.data.manage.database.HealthHRVdata?) {
-            if (data != null) Log.d(TAG, "V3 HRV received — mapping deferred (W6)")
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            data.items.forEach { item ->
+                if (item.hrvValue <= 0) return@forEach
+                // minOffset is minutes from the day's startTime (both minute-of-day units).
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.startTime + item.minOffset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onHrvReading(WatchHrvReading(recordedAt = ts, hrvMs = item.hrvValue))
+                }
+            }
         }
+
         override fun onGetHealthRespiratoryRate(data: com.ido.ble.data.manage.database.HealthRespiratoryRate?) {
-            if (data != null) Log.d(TAG, "V3 respiratory rate received — mapping deferred (W6)")
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            data.items.forEach { item ->
+                if (item.respid <= 0) return@forEach
+                // respiratory item.start_time is the sample's minute-of-day.
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, item.start_time * 60)
+                }.onSuccess { ts ->
+                    listener?.onRespiratoryReading(
+                        WatchRespiratoryReading(recordedAt = ts, breathsPerMinute = item.respid)
+                    )
+                }
+            }
         }
+
         override fun onGetHealthBodyPower(data: com.ido.ble.data.manage.database.HealthBodyPower?) {
-            if (data != null) Log.d(TAG, "V3 body power received — mapping deferred (W6)")
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            data.items.forEach { item ->
+                if (item.value <= 0) return@forEach
+                // body-power item.offset is minutes from the day's start_time.
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onBodyEnergyReading(WatchBodyEnergyReading(recordedAt = ts, energy = item.value))
+                }
+            }
         }
-        override fun onGetHealthSpO2Data(data: com.ido.ble.data.manage.database.HealthSpO2?, items: MutableList<com.ido.ble.data.manage.database.HealthSpO2Item>?, isLast: Boolean) {
-            if (data != null) Log.d(TAG, "V3 SpO2 received — mapping deferred (W6)")
-        }
+
         override fun onGetHealthTemperature(data: com.ido.ble.data.manage.database.HealthTemperature?) {
-            if (data != null) Log.d(TAG, "V3 temperature received — mapping deferred (W6)")
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            // Temperature carries an explicit base time (hour/minute/sec) and per-item offset whose
+            // unit (second vs minute) is given by time_offset_unit — no guessing here.
+            val baseSeconds = data.hour * 3600 + data.minute * 60 + data.sec
+            val unitSeconds =
+                if (data.time_offset_unit == com.ido.ble.data.manage.database.HealthTemperature.TIME_OFFSET_UNIT_MINUTE) 60 else 1
+            data.items.forEach { item ->
+                if (item.value <= 0) return@forEach
+                // Raw value is centi-degrees Celsius (e.g. 3650 → 36.50 °C).
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, baseSeconds + item.offset * unitSeconds)
+                }.onSuccess { ts ->
+                    listener?.onTemperatureReading(
+                        WatchTemperatureReading(recordedAt = ts, celsius = item.value / 100.0)
+                    )
+                }
+            }
+        }
+
+        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, V3 sport
+        // (a per-minute daily activity rollup, distinct from HealthActivityV3 workout sessions),
+        // BP V3, body composition, noise, pressure, swimming, ECG, emotion-health. ──
+        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {
+            if (data != null) Log.d(TAG, "V3 sport (daily activity rollup) received — mapping deferred")
         }
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
@@ -458,6 +527,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onHeartRateDay(day: WatchHeartRateDay) { Log.i(TAG, "HEART_RATE $day") }
         override fun onSleepSession(session: WatchSleepSession) { Log.i(TAG, "SLEEP $session") }
         override fun onWorkout(workout: WatchWorkout) { Log.i(TAG, "WORKOUT $workout") }
+        override fun onSpo2Reading(reading: WatchSpo2Reading) { Log.i(TAG, "SPO2 $reading") }
+        override fun onHrvReading(reading: WatchHrvReading) { Log.i(TAG, "HRV $reading") }
+        override fun onRespiratoryReading(reading: WatchRespiratoryReading) { Log.i(TAG, "RESP $reading") }
+        override fun onTemperatureReading(reading: WatchTemperatureReading) { Log.i(TAG, "TEMP $reading") }
+        override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { Log.i(TAG, "BODY_ENERGY $reading") }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }
@@ -477,5 +551,20 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         fun ymdhms(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int): String =
             "%04d-%02d-%02d %02d:%02d:%02d".format(year, month, day, hour, minute, second)
+
+        private val LOCAL_DT_FMT: java.time.format.DateTimeFormatter =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+        /**
+         * Resolve a "YYYY-MM-DD HH:MM:SS" wall-clock string from a day + an offset in seconds from
+         * that day's local midnight. Goes through [java.time.LocalDate] so a sample that rolls past
+         * midnight carries to the next day correctly. Throws on an invalid date — callers wrap in
+         * runCatching so one bad record can't abort the sync.
+         */
+        fun localDateTime(year: Int, month: Int, day: Int, secondsFromMidnight: Int): String =
+            java.time.LocalDate.of(year, month, day)
+                .atStartOfDay()
+                .plusSeconds(secondsFromMidnight.toLong())
+                .format(LOCAL_DT_FMT)
     }
 }

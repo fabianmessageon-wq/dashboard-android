@@ -30,6 +30,11 @@ class UploadingWatchHealthListener(
     private val heartRateDays = mutableListOf<WatchHeartRateDay>()
     private val sleepSessions = mutableListOf<WatchSleepSession>()
     private val workouts = mutableListOf<WatchWorkout>()
+    private val spo2Readings = mutableListOf<WatchSpo2Reading>()
+    private val hrvReadings = mutableListOf<WatchHrvReading>()
+    private val respiratoryReadings = mutableListOf<WatchRespiratoryReading>()
+    private val temperatureReadings = mutableListOf<WatchTemperatureReading>()
+    private val bodyEnergyReadings = mutableListOf<WatchBodyEnergyReading>()
 
     override fun onActivityDay(day: WatchActivityDay) {
         Log.i(TAG, "ACTIVITY $day")
@@ -51,6 +56,31 @@ class UploadingWatchHealthListener(
         synchronized(lock) { workouts += workout }
     }
 
+    override fun onSpo2Reading(reading: WatchSpo2Reading) {
+        Log.i(TAG, "SPO2 $reading")
+        synchronized(lock) { spo2Readings += reading }
+    }
+
+    override fun onHrvReading(reading: WatchHrvReading) {
+        Log.i(TAG, "HRV $reading")
+        synchronized(lock) { hrvReadings += reading }
+    }
+
+    override fun onRespiratoryReading(reading: WatchRespiratoryReading) {
+        Log.i(TAG, "RESP $reading")
+        synchronized(lock) { respiratoryReadings += reading }
+    }
+
+    override fun onTemperatureReading(reading: WatchTemperatureReading) {
+        Log.i(TAG, "TEMP $reading")
+        synchronized(lock) { temperatureReadings += reading }
+    }
+
+    override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) {
+        Log.i(TAG, "BODY_ENERGY $reading")
+        synchronized(lock) { bodyEnergyReadings += reading }
+    }
+
     override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
 
     override fun onSyncComplete() {
@@ -68,7 +98,10 @@ class UploadingWatchHealthListener(
     private fun flush() {
         val batch = synchronized(lock) {
             if (activityDays.isEmpty() && heartRateDays.isEmpty() &&
-                sleepSessions.isEmpty() && workouts.isEmpty()
+                sleepSessions.isEmpty() && workouts.isEmpty() &&
+                spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
+                respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
+                bodyEnergyReadings.isEmpty()
             ) {
                 return
             }
@@ -78,11 +111,21 @@ class UploadingWatchHealthListener(
                 heartRateDays = heartRateDays.toList(),
                 sleepSessions = sleepSessions.toList(),
                 workouts = workouts.toList(),
+                spo2Readings = spo2Readings.toList(),
+                hrvReadings = hrvReadings.toList(),
+                respiratoryReadings = respiratoryReadings.toList(),
+                temperatureReadings = temperatureReadings.toList(),
+                bodyEnergyReadings = bodyEnergyReadings.toList(),
             ).also {
                 activityDays.clear()
                 heartRateDays.clear()
                 sleepSessions.clear()
                 workouts.clear()
+                spo2Readings.clear()
+                hrvReadings.clear()
+                respiratoryReadings.clear()
+                temperatureReadings.clear()
+                bodyEnergyReadings.clear()
             }
         }
 

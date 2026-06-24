@@ -1,10 +1,15 @@
 package dev.jaredhq.dashboardandroid.data.api.dto
 
 import dev.jaredhq.dashboardandroid.watch.engine.WatchActivityDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
+import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
 import kotlinx.serialization.Serializable
 import java.time.LocalDateTime
@@ -30,6 +35,11 @@ data class WatchHealthUploadDto(
     val heartRateDays: List<WatchHeartRateDayDto> = emptyList(),
     val sleepSessions: List<WatchSleepSessionDto> = emptyList(),
     val workouts: List<WatchWorkoutDto> = emptyList(),
+    val spo2Readings: List<WatchSpo2ReadingDto> = emptyList(),
+    val hrvReadings: List<WatchHrvReadingDto> = emptyList(),
+    val respiratoryReadings: List<WatchRespiratoryReadingDto> = emptyList(),
+    val temperatureReadings: List<WatchTemperatureReadingDto> = emptyList(),
+    val bodyEnergyReadings: List<WatchBodyEnergyReadingDto> = emptyList(),
 )
 
 @Serializable
@@ -96,6 +106,45 @@ data class WatchWorkoutDto(
     val minHeartRate: Int? = null,
 )
 
+// V3 intraday point metrics. Each row is one sample: a `date` (YYYY-MM-DD, for daily grouping) plus
+// `recordedAt` epoch seconds (the watch's local wall-clock interpreted in the phone's zone). The
+// server upserts by (user, recordedAt) per table so re-uploading a sync is idempotent.
+
+@Serializable
+data class WatchSpo2ReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val percent: Int,
+)
+
+@Serializable
+data class WatchHrvReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val hrvMs: Int,
+)
+
+@Serializable
+data class WatchRespiratoryReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val breathsPerMinute: Int,
+)
+
+@Serializable
+data class WatchTemperatureReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val celsius: Double,
+)
+
+@Serializable
+data class WatchBodyEnergyReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val energy: Int,
+)
+
 /**
  * Server acknowledgement. Defensively defaulted like the other widget DTOs so a contract skew (or
  * an empty 2xx body) degrades to "accepted" rather than failing the sync.
@@ -114,6 +163,11 @@ fun WatchHealthBatch.toDto(): WatchHealthUploadDto = WatchHealthUploadDto(
     heartRateDays = heartRateDays.map { it.toDto() },
     sleepSessions = sleepSessions.map { it.toDto() },
     workouts = workouts.map { it.toDto() },
+    spo2Readings = spo2Readings.map { it.toDto() },
+    hrvReadings = hrvReadings.map { it.toDto() },
+    respiratoryReadings = respiratoryReadings.map { it.toDto() },
+    temperatureReadings = temperatureReadings.map { it.toDto() },
+    bodyEnergyReadings = bodyEnergyReadings.map { it.toDto() },
 )
 
 private fun WatchActivityDay.toDto() = WatchActivityDayDto(
@@ -166,7 +220,7 @@ private val WORKOUT_TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("y
 
 private fun WatchWorkout.toDto() = WatchWorkoutDto(
     date = startDateTime.take(10), // YYYY-MM-DD
-    startedAt = workoutStartEpochSeconds(startDateTime),
+    startedAt = localWallClockEpochSeconds(startDateTime),
     durationSeconds = durationSeconds,
     activityType = type,
     steps = steps,
@@ -177,12 +231,42 @@ private fun WatchWorkout.toDto() = WatchWorkoutDto(
     minHeartRate = minHeartRate,
 )
 
+private fun WatchSpo2Reading.toDto() = WatchSpo2ReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    percent = percent,
+)
+
+private fun WatchHrvReading.toDto() = WatchHrvReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    hrvMs = hrvMs,
+)
+
+private fun WatchRespiratoryReading.toDto() = WatchRespiratoryReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    breathsPerMinute = breathsPerMinute,
+)
+
+private fun WatchTemperatureReading.toDto() = WatchTemperatureReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    celsius = celsius,
+)
+
+private fun WatchBodyEnergyReading.toDto() = WatchBodyEnergyReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    energy = energy,
+)
+
 /**
- * The watch reports session start as local wall-clock (no zone). Interpret it in the phone's zone
- * to an epoch — best available approximation; falls back to 0 if the string is unparseable
- * (e.g. an all-zero sentinel that slipped the engine guard).
+ * The watch reports times as local wall-clock (no zone). Interpret a "YYYY-MM-DD HH:MM:SS" string in
+ * the phone's zone to an epoch — best available approximation; falls back to 0 if the string is
+ * unparseable (e.g. an all-zero sentinel that slipped the engine guard).
  */
-private fun workoutStartEpochSeconds(localDateTime: String): Long = runCatching {
+private fun localWallClockEpochSeconds(localDateTime: String): Long = runCatching {
     LocalDateTime.parse(localDateTime, WORKOUT_TIME_FMT)
         .atZone(ZoneId.systemDefault())
         .toEpochSecond()
