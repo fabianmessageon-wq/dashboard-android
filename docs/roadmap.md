@@ -116,9 +116,17 @@ only because the UI/worker stayed idle. **Planned:** point the Watch UI + `Watch
   the deliberately minimal `WatchEngine` (`init/connect/disconnect/isConnected/syncHealth` +
   `WatchHealthListener`). Repointing means building a **new product Watch screen** (connection state
   + synced health) and deciding whether to keep the debug console as a dev-only tool.
-- `WatchEngine` exposes **no connection-state `StateFlow`** yet — the UI needs one. First, additive
-  step: add `connectionState: StateFlow<…>` to the interface and emit it from `IdoSdkWatchEngine`'s
-  scan/connect/bind/sync callbacks.
+- ~~`WatchEngine` exposes **no connection-state `StateFlow`** yet~~ — ✅ **done (first additive
+  step).** Added `enum WatchEngineConnectionState` (`DISCONNECTED / SCANNING / CONNECTING / BINDING /
+  AWAITING_WATCH_CONFIRMATION / CONNECTED / SYNCING`) + `connectionState: StateFlow<…>` on the
+  `WatchEngine` interface; `IdoSdkWatchEngine` backs it with a `MutableStateFlow` and emits at every
+  lifecycle point (connect→SCANNING, scan-match/onConnectStart→CONNECTING, onConnectSuccess→
+  CONNECTED|BINDING, bind onNeedAuth→AWAITING_WATCH_CONFIRMATION, bind onSuccess→CONNECTED,
+  startSync→SYNCING, sync end→CONNECTED-if-still-linked, all failures/disconnect→DISCONNECTED). The
+  state type is engine-agnostic (carries no transport detail — distinct from the clean-room
+  `ble.WatchConnectionState`). Additive only; `compileDebugKotlin` + `testDebugUnitTest` green. **Next
+  here:** build the new product Watch screen that collects this flow + drives `connect`/`syncHealth`,
+  then retire the debug-auto-connect scaffold.
 - `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
   Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
   worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold

@@ -26,6 +26,9 @@ import com.ido.ble.data.manage.database.HealthSleepV3
 import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
 import com.ido.ble.protocol.model.SupportFunctionInfo
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * [WatchEngine] backed by the vendored IDO/VeryFit SDK (ADR 0001).
@@ -48,6 +51,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     // Defaults to a logcat listener so a sync is observable on-device before the upload
     // path is wired; ServiceLocator/repository can replace it with the real uploader.
     override var listener: WatchHealthListener? = LoggingWatchHealthListener
+
+    private val _connectionState =
+        MutableStateFlow(WatchEngineConnectionState.DISCONNECTED)
+    override val connectionState: StateFlow<WatchEngineConnectionState> =
+        _connectionState.asStateFlow()
 
     @Volatile
     private var initialized = false
@@ -106,12 +114,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         targetMac = macAddress.uppercase()
         functionTableCached = false
         Log.i(TAG, "connect($macAddress) → scanning to find + bind")
+        _connectionState.value = WatchEngineConnectionState.SCANNING
         BLEManager.startScanDevices()
     }
 
     override fun disconnect() {
         functionTableCached = false
         pendingSyncAfterFunctionTable = false
+        _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
     }
 
@@ -141,6 +151,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // startSyncHealthData()/startSyncActivityData() concurrently instead made the watch NAK
         // the interleaved data-pull commands with status=3. Data arrives via the ISyncDataListener.
         Log.i(TAG, "syncAllData (config+health+activity+V3, sequential)")
+        _connectionState.value = WatchEngineConnectionState.SYNCING
         val para = SyncPara().apply {
             // Config sync *pushes* phone settings to the watch; we only read health, and on this
             // device it fails ("sync config failed!13"), so skip it (VeryFit's restart path does
@@ -152,6 +163,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
         BLEManager.syncAllData(para)
     }
+
+    /** Connection state to settle on once a sync run ends — CONNECTED if the link is still up. */
+    private fun postSyncState(): WatchEngineConnectionState =
+        if (isConnected()) WatchEngineConnectionState.CONNECTED
+        else WatchEngineConnectionState.DISCONNECTED
 
     private fun registerCallbacks() {
         val cm = CallBackManager.getManager()
@@ -174,6 +190,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.d(TAG, "found '${device.mDeviceName}' $addr rssi=${device.mRssi}")
             if (addr.equals(targetMac, ignoreCase = true)) {
                 Log.i(TAG, "target watch found → stop scan + connect")
+                _connectionState.value = WatchEngineConnectionState.CONNECTING
                 BLEManager.stopScanDevices()
                 BLEManager.connect(device)
             }
@@ -181,7 +198,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     private val connectCallBack = object : ConnectCallBack.ICallBack {
-        override fun onConnectStart(mac: String?) { Log.i(TAG, "onConnectStart $mac") }
+        override fun onConnectStart(mac: String?) {
+            Log.i(TAG, "onConnectStart $mac")
+            _connectionState.value = WatchEngineConnectionState.CONNECTING
+        }
         override fun onConnecting(mac: String?) { Log.i(TAG, "onConnecting $mac") }
         override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
 
@@ -192,7 +212,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 // Fresh SDK DB isn't bound to this watch (VeryFit owns the original bond).
                 // Bind to claim it — may prompt a confirmation on the watch face (onNeedAuth).
                 Log.i(TAG, "not bound → bind()")
+                _connectionState.value = WatchEngineConnectionState.BINDING
                 BLEManager.bind()
+            } else {
+                _connectionState.value = WatchEngineConnectionState.CONNECTED
             }
         }
 
@@ -215,6 +238,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
             Log.w(TAG, "onConnectFailed reason=$reason mac=$mac")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
 
@@ -222,6 +246,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "onConnectBreak $mac")
             functionTableCached = false
             pendingSyncAfterFunctionTable = false
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
     }
@@ -229,6 +254,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private val bindCallBack = object : BindCallBack.ICallBack {
         override fun onSuccess() {
             Log.i(TAG, "BIND SUCCESS — watch claimed by our app; fetching function table then syncing")
+            _connectionState.value = WatchEngineConnectionState.CONNECTED
             // Now that bind has actually completed, the device will release its data. Give the
             // link a beat to settle (Classic profiles re-attach right after bind), then syncHealth()
             // which first pulls the function table (getFunctionTables) before the actual sync.
@@ -236,11 +262,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
         override fun onNeedAuth(code: Int) {
             Log.w(TAG, "BIND needs confirmation on the WATCH FACE now (code=$code) — tap to allow")
+            _connectionState.value = WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
         }
-        override fun onReject() { Log.w(TAG, "bind REJECTED on the watch") }
-        override fun onCancel() { Log.w(TAG, "bind cancelled") }
+        override fun onReject() {
+            Log.w(TAG, "bind REJECTED on the watch")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        }
+        override fun onCancel() {
+            Log.w(TAG, "bind cancelled")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        }
         override fun onFailed(error: BindCallBack.BindFailedError?) {
             Log.w(TAG, "bind FAILED: $error")
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
     }
@@ -271,10 +305,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onProgress(percent: Int) { listener?.onSyncProgress(percent) }
         override fun onSuccess() {
             Log.i(TAG, "syncAllData onSuccess")
+            _connectionState.value = postSyncState()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
+            // Often the benign post-transfer conn-param step failing after all data is delivered
+            // (roadmap W4) — the link is usually still up, so reflect actual connectivity.
             Log.w(TAG, "syncAllData onFailed: $type")
+            _connectionState.value = postSyncState()
             listener?.onSyncFailed()
         }
     }
