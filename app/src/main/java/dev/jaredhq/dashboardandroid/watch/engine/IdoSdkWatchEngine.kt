@@ -70,17 +70,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             registerCallbacks()
             initialized = true
             Log.i(TAG, "IDO SDK initialised")
-
-            // TEST SCAFFOLD (debug builds only): auto-connect to the known watch a few seconds
-            // after init so the connect→bind→sync→metrics path can be exercised on-device
-            // without UI. Remove once the Watch screen drives connect/sync. Gated off in release.
-            if (dev.jaredhq.dashboardandroid.BuildConfig.DEBUG && DEBUG_AUTO_CONNECT_MAC != null) {
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    Log.i(TAG, "DEBUG auto-connect → $DEBUG_AUTO_CONNECT_MAC")
-                    runCatching { connect(DEBUG_AUTO_CONNECT_MAC) }
-                        .onFailure { Log.e(TAG, "debug auto-connect failed", it) }
-                }, 4_000)
-            }
+            // The product Watch screen now drives connect/sync via this engine, and
+            // WatchSyncWorker drives it in the background — so the old debug auto-connect scaffold
+            // is gone (it would race the UI/worker for the single GATT link).
         }
     }
 
@@ -577,9 +569,6 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
-
-        /** Debug-only auto-connect target (the Active 4 Pro MAC). Null disables the scaffold. */
-        val DEBUG_AUTO_CONNECT_MAC: String? = "F4:91:29:51:C6:45"
 
         /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
         fun Int.nonZero(): Int? = if (this != 0) this else null

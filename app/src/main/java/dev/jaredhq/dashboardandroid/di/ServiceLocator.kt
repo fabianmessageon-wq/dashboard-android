@@ -18,7 +18,6 @@ import dev.jaredhq.dashboardandroid.watch.engine.IdoSdkWatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.UploadingWatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
-import dev.jaredhq.dashboardandroid.work.WatchSyncScheduler
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -98,11 +97,11 @@ object ServiceLocator {
                 apiProvider = { makeClient() },
             )
 
-            watchBleManager = WatchBleManager(appContext).apply {
-                // Auto-upload telemetry whenever the connection state changes
-                // (connect/disconnect/error) — the worker no-ops if unconfigured.
-                onConnectionEvent = { WatchSyncScheduler.syncNow(appContext) }
-            }
+            // Retained clean-room BLE stack (debug console / future CleanRoomWatchEngine). No longer
+            // wired to trigger the sync worker: the worker now drives a *health* sync via the
+            // WatchEngine, and letting this second stack kick that off would put both BLE stacks on
+            // the same watch at once (the documented contention). The product UI drives the engine.
+            watchBleManager = WatchBleManager(appContext)
 
             // Vendored-SDK engine (ADR 0001). init() is idempotent; it loads the native lib
             // + opens the SDK's own DB once at startup. Guarded so a native-load/SDK-init

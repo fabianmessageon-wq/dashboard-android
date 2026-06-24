@@ -135,10 +135,19 @@ only because the UI/worker stayed idle. **Planned:** point the Watch UI + `Watch
   the benign end-of-run failure). The `MainActivity` Watch tab now points here; the clean-room debug
   console (`WatchScreen`/`WatchViewModel`) is **retained but unreferenced** for a future hidden dev
   entry. `assembleDebug` + `testDebugUnitTest` green (new `WatchHealthViewModelTest`, 6 cases).
-  **Next here:** (1) retire `IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC` now the screen drives connect
-  (kept for now so on-device the new UI passively shows the auto-connect lifecycle); (2) repoint
-  `WatchSyncWorker` off `WatchBleManager` onto the engine's health-upload path (folds into W5);
-  (3) optionally surface a hidden entry to the debug console.
+- ✅ **`WatchSyncWorker` repointed onto the engine + debug auto-connect scaffold retired.** The
+  background worker no longer uploads battery/MTU telemetry via `WatchBleManager`; it now drives a
+  **health** sync through the `WatchEngine` (`connect` → auto (re)bind+sync → await one run via the
+  `connectionState` flow → `disconnect`), and the engine's upload listener pushes the records. It
+  no-ops when unconfigured **or when the engine is already busy** (so the foreground UI and the
+  worker never contend for the one GATT link), and times out + succeeds if the watch is out of range.
+  `ServiceLocator` no longer wires `WatchBleManager.onConnectionEvent` to the worker (that would put
+  both BLE stacks on the watch at once). `IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC` and its
+  postDelayed scaffold are deleted now the UI/worker drive connect. `assembleDebug` +
+  `testDebugUnitTest` green. **On-device unverified:** background BLE connect/sync from a Worker and
+  the busy-guard need a hardware pass. On-device verification is now Watch tab → **Connect** (no more
+  auto-connect on launch). **Still open:** optionally surface a hidden entry to the retained debug
+  console; source `deviceId` from the connected device once multi-watch matters.
 - `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
   Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
   worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold
@@ -148,8 +157,9 @@ Operational notes for the next session:
 - ADB is wireless: `192.168.20.100:40367` (rediscover via `adb mdns services` if dropped; do
   **not** run `adb usb` — it drops the wireless link).
 - Force-stop VeryFit (`com.watch.life`) before testing; grant `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT`.
-- A debug auto-connect scaffold (`IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC`) fires connect+sync
-  ~4s after launch; remove it once the Watch screen drives connect/sync via the `WatchEngine`.
+- The debug auto-connect scaffold is **gone** — open the **Watch tab → Connect** to drive
+  connect/(re)bind/sync via the `WatchEngine`; the new screen shows the live lifecycle + per-sync
+  record counts. (`WatchSyncWorker` also drives a background health sync every 6h / on `syncNow`.)
 - The watch is now **bound to our app** — VeryFit will need re-pairing (reopen it) if you want it back.
 
 ### Superseded clean-room direction (pre-2026-06-24, kept for reference)
