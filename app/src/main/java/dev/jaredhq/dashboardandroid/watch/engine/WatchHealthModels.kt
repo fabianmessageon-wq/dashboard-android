@@ -104,3 +104,28 @@ interface WatchHealthListener {
     fun onSyncComplete() {}
     fun onSyncFailed() {}
 }
+
+/**
+ * A batch of decoded health records from one sync, ready to upload to the dashboard
+ * (`POST /api/widget/v1/watch/health`). [deviceId] is the watch MAC the records came from.
+ */
+data class WatchHealthBatch(
+    val deviceId: String,
+    val activityDays: List<WatchActivityDay> = emptyList(),
+    val heartRateDays: List<WatchHeartRateDay> = emptyList(),
+    val sleepSessions: List<WatchSleepSession> = emptyList(),
+    val workouts: List<WatchWorkout> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() = activityDays.isEmpty() && heartRateDays.isEmpty() &&
+            sleepSessions.isEmpty() && workouts.isEmpty()
+
+    val recordCount: Int
+        get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size
+}
+
+/** Server acknowledgement of a [WatchHealthBatch] upload. */
+data class WatchHealthUploadResult(
+    val accepted: Boolean,
+    val storedCount: Int = 0,
+)

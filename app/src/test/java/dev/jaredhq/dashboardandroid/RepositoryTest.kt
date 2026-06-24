@@ -187,6 +187,9 @@ class RepositoryTest {
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
         override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult = fail()
+        override suspend fun uploadWatchHealth(
+            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
     }
 
     /** getToday works, but the quote endpoint is unavailable. */
@@ -202,6 +205,10 @@ class RepositoryTest {
         override suspend fun chat(message: String): CaptureResult =
             throw ApiException(0, "n/a")
         override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
+            throw ApiException(0, "n/a")
+        override suspend fun uploadWatchHealth(
+            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
             throw ApiException(0, "n/a")
     }
 }

@@ -13,6 +13,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
 
@@ -55,6 +57,9 @@ class RetrofitDashboardApiClient(
 
     override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
         call { service.syncWatch(request.toDto()).toDomain() }
+
+    override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult =
+        call { service.uploadWatchHealth(batch.toDto()).toDomain() }
 
     /** Run a service call, normalizing every failure into [ApiException]. */
     private inline fun <T> call(block: () -> T): T = try {

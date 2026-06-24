@@ -184,6 +184,10 @@ class CaptureViewModelTest {
         )
         override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult =
             WatchSyncResult(accepted = true, deviceId = request.deviceId)
+        override suspend fun uploadWatchHealth(
+            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
+            dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult(accepted = true)
     }
 
     /** Every call fails with a given HTTP status (message must not leak to the UI). */
@@ -200,5 +204,8 @@ class CaptureViewModelTest {
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
         override suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult = fail()
+        override suspend fun uploadWatchHealth(
+            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
     }
 }

@@ -7,6 +7,8 @@ import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
 import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 
 /**
  * The dashboard server contract, expressed in domain terms. The rest of the app
@@ -64,6 +66,13 @@ interface DashboardApiClient {
      * acknowledgement.
      */
     suspend fun syncWatch(request: WatchSyncRequest): WatchSyncResult
+
+    /**
+     * POST /api/widget/v1/watch/health — upload decoded health records from a watch sync
+     * (activity days, heart-rate days, sleep sessions, workouts). Upserts are idempotent, so
+     * re-uploading the same sync is safe. Returns the server's acknowledgement.
+     */
+    suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult
 }
 
 /** Thrown by API clients. [status] is the HTTP code when known (0 otherwise). */
