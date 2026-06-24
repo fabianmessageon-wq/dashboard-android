@@ -15,12 +15,14 @@ import com.ido.ble.callback.CallBackManager
 import com.ido.ble.callback.ConnectCallBack
 import com.ido.ble.callback.ScanCallBack
 import com.ido.ble.data.manage.database.HealthActivity
+import com.ido.ble.data.manage.database.HealthActivityV3
 import com.ido.ble.data.manage.database.HealthBloodPressed
 import com.ido.ble.data.manage.database.HealthBloodPressedItem
 import com.ido.ble.data.manage.database.HealthHeartRate
 import com.ido.ble.data.manage.database.HealthHeartRateItem
 import com.ido.ble.data.manage.database.HealthSleep
 import com.ido.ble.data.manage.database.HealthSleepItem
+import com.ido.ble.data.manage.database.HealthSleepV3
 import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
 import com.ido.ble.protocol.model.SupportFunctionInfo
@@ -319,24 +321,47 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             if (data != null) Log.d(TAG, "onGetBloodPressureData — mapping deferred (W6)")
         }
 
-        // ── V3 metrics + GPS + drink plan: deferred (W6); no-op sinks so the data is consumed ──
+        // ── V3 health (this watch's real path) ──
+        override fun onGetHealthSleepV3Data(data: HealthSleepV3?) {
+            // The sync stream can include empty/sentinel records (year 0, all-zero) — skip them.
+            if (data == null || data.get_up_year == 0) return
+            listener?.onSleepSession(data.toDomain())
+        }
+
+        override fun onGetHealthActivityV3Data(data: HealthActivityV3?) {
+            if (data == null || data.year == 0) return
+            listener?.onWorkout(data.toWorkout())
+        }
+
+        // ── Remaining V3 metrics + GPS + drink plan: not yet mapped to domain (need new models /
+        // dashboard columns — W6). Logged so they're observable on-device; no-op sinks otherwise. ──
+        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {
+            if (data != null) Log.d(TAG, "V3 sport session received — mapping deferred (W6)")
+        }
+        override fun onGetHealthHRV(data: com.ido.ble.data.manage.database.HealthHRVdata?) {
+            if (data != null) Log.d(TAG, "V3 HRV received — mapping deferred (W6)")
+        }
+        override fun onGetHealthRespiratoryRate(data: com.ido.ble.data.manage.database.HealthRespiratoryRate?) {
+            if (data != null) Log.d(TAG, "V3 respiratory rate received — mapping deferred (W6)")
+        }
+        override fun onGetHealthBodyPower(data: com.ido.ble.data.manage.database.HealthBodyPower?) {
+            if (data != null) Log.d(TAG, "V3 body power received — mapping deferred (W6)")
+        }
+        override fun onGetHealthSpO2Data(data: com.ido.ble.data.manage.database.HealthSpO2?, items: MutableList<com.ido.ble.data.manage.database.HealthSpO2Item>?, isLast: Boolean) {
+            if (data != null) Log.d(TAG, "V3 SpO2 received — mapping deferred (W6)")
+        }
+        override fun onGetHealthTemperature(data: com.ido.ble.data.manage.database.HealthTemperature?) {
+            if (data != null) Log.d(TAG, "V3 temperature received — mapping deferred (W6)")
+        }
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
-        override fun onGetHealthActivityV3Data(data: com.ido.ble.data.manage.database.HealthActivityV3?) {}
         override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
         override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {}
-        override fun onGetHealthBodyPower(data: com.ido.ble.data.manage.database.HealthBodyPower?) {}
         override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {}
-        override fun onGetHealthHRV(data: com.ido.ble.data.manage.database.HealthHRVdata?) {}
         override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {}
         override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {}
         override fun onGetHealthPressureData(data: com.ido.ble.data.manage.database.HealthPressure?, items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?, isLast: Boolean) {}
-        override fun onGetHealthRespiratoryRate(data: com.ido.ble.data.manage.database.HealthRespiratoryRate?) {}
-        override fun onGetHealthSleepV3Data(data: com.ido.ble.data.manage.database.HealthSleepV3?) {}
-        override fun onGetHealthSpO2Data(data: com.ido.ble.data.manage.database.HealthSpO2?, items: MutableList<com.ido.ble.data.manage.database.HealthSpO2Item>?, isLast: Boolean) {}
-        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {}
         override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {}
-        override fun onGetHealthTemperature(data: com.ido.ble.data.manage.database.HealthTemperature?) {}
         override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {}
         override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {}
     }
@@ -391,11 +416,48 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         sleepEndMinute = sleepEndedTimeM,
     )
 
+    // ── V3 mappers (the Active 4 Pro's real health path) ──
+
+    private fun HealthSleepV3.toDomain() = WatchSleepSession(
+        // V3 keys the night by wake-up ("get up") time.
+        date = ymd(get_up_year, get_up_month, get_up_day),
+        totalMinutes = total_sleep_time_mins,
+        deepMinutes = deep_mins,
+        lightMinutes = light_mins,
+        awakeMinutes = wake_mins,        // V3 reports awake minutes distinctly (v2 did not)
+        deepCount = deep_count,
+        lightCount = light_count,
+        awakeCount = wake_count,
+        score = sleep_score.nonZero(),
+        sleepEndHour = get_up_hour,
+        sleepEndMinute = get_up_minte,   // SDK field spelling
+        // NOTE: V3 also carries rem_mins/rem_count + sleep_avg_hr/spo2/respir — surfaced once the
+        // domain model + dashboard schema gain those columns (W6/W5).
+    )
+
+    private fun HealthActivityV3.toWorkout() = WatchWorkout(
+        startDateTime = ymdhms(year, month, day, hour, minute, second),
+        endDateTime = ymdhms(end_year, end_month, end_day, end_hour, end_minute, end_sec),
+        type = act_type,
+        durationSeconds = durations.nonZero(),
+        calories = calories.nonZero(),
+        distanceMeters = distance.nonZero(),
+        steps = step.nonZero(),
+        avgHeartRate = avg_hr_value.nonZero(),
+        maxHeartRate = max_hr_value.nonZero(),
+        minHeartRate = min_hr_value.nonZero(),
+        avgSpeed = avg_speed.nonZero(),
+        maxSpeed = max_speed.nonZero(),
+        trainingEffect = training_effect.nonZero(),
+        vo2Max = vO2max.nonZero(),
+    )
+
     /** Logs every decoded metric + sync lifecycle to logcat (tag [TAG]). Observability default. */
     private object LoggingWatchHealthListener : WatchHealthListener {
         override fun onActivityDay(day: WatchActivityDay) { Log.i(TAG, "ACTIVITY $day") }
         override fun onHeartRateDay(day: WatchHeartRateDay) { Log.i(TAG, "HEART_RATE $day") }
         override fun onSleepSession(session: WatchSleepSession) { Log.i(TAG, "SLEEP $session") }
+        override fun onWorkout(workout: WatchWorkout) { Log.i(TAG, "WORKOUT $workout") }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }
@@ -412,5 +474,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         fun ymd(year: Int, month: Int, day: Int): String =
             "%04d-%02d-%02d".format(year, month, day)
+
+        fun ymdhms(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int): String =
+            "%04d-%02d-%02d %02d:%02d:%02d".format(year, month, day, hour, minute, second)
     }
 }

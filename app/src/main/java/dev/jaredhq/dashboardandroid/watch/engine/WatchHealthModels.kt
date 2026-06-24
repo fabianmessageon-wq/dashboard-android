@@ -63,6 +63,30 @@ data class WatchSleepSession(
 )
 
 /**
+ * A single recorded workout / sport session (V3 `HealthActivityV3`).
+ *
+ * The Active 4 Pro (and other V3 devices) deliver exercise sessions through the V3 sync path
+ * rather than the v2 daily rollup; [type] is the SDK's raw activity-type code. Speeds are in the
+ * SDK's raw units (cm/s-ish); leave unit normalisation to the upload/UI layer.
+ */
+data class WatchWorkout(
+    val startDateTime: String, // YYYY-MM-DD HH:MM:SS
+    val endDateTime: String,   // YYYY-MM-DD HH:MM:SS
+    val type: Int,
+    val durationSeconds: Int?,
+    val calories: Int?,
+    val distanceMeters: Int?,
+    val steps: Int?,
+    val avgHeartRate: Int?,
+    val maxHeartRate: Int?,
+    val minHeartRate: Int?,
+    val avgSpeed: Int?,
+    val maxSpeed: Int?,
+    val trainingEffect: Int?,
+    val vo2Max: Int?,
+)
+
+/**
  * Listener for decoded health data emitted by a [WatchEngine] during a sync.
  *
  * Methods fire on the SDK's callback thread (the IDO SDK marshals to the UI thread); the
@@ -73,6 +97,8 @@ interface WatchHealthListener {
     fun onActivityDay(day: WatchActivityDay) {}
     fun onHeartRateDay(day: WatchHeartRateDay) {}
     fun onSleepSession(session: WatchSleepSession) {}
+    /** A V3 workout/sport session (this is how V3 devices like the Active 4 Pro report exercise). */
+    fun onWorkout(workout: WatchWorkout) {}
 
     fun onSyncProgress(percent: Int) {}
     fun onSyncComplete() {}
