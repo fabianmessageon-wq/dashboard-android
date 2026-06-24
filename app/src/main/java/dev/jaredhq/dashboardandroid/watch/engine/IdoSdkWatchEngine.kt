@@ -6,12 +6,14 @@ import com.ido.ble.BLEManager
 import com.ido.ble.InitParam
 import com.ido.ble.bluetooth.connect.ConnectFailedReason
 import com.ido.ble.bluetooth.device.BLEDevice
+import com.ido.ble.business.sync.ISyncDataListener
+import com.ido.ble.business.sync.ISyncProgressListener
+import com.ido.ble.business.sync.SyncPara
 import com.ido.ble.callback.BaseGetDeviceInfoCallBack
 import com.ido.ble.callback.BindCallBack
 import com.ido.ble.callback.CallBackManager
 import com.ido.ble.callback.ConnectCallBack
 import com.ido.ble.callback.ScanCallBack
-import com.ido.ble.callback.SyncCallBack
 import com.ido.ble.data.manage.database.HealthActivity
 import com.ido.ble.data.manage.database.HealthBloodPressed
 import com.ido.ble.data.manage.database.HealthBloodPressedItem
@@ -131,9 +133,22 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     private fun startSync() {
-        Log.i(TAG, "starting health + activity sync")
-        BLEManager.startSyncActivityData()
-        BLEManager.startSyncHealthData()
+        // Orchestrated, sequential sync — the exact path the stock VeryFit app uses
+        // (DeviceManagerPresenter / BaseHomeFragmentPresenter): one SyncPara drives config →
+        // health (HR/sleep/sport) → activity → V3 as ordered tasks. Firing
+        // startSyncHealthData()/startSyncActivityData() concurrently instead made the watch NAK
+        // the interleaved data-pull commands with status=3. Data arrives via the ISyncDataListener.
+        Log.i(TAG, "syncAllData (config+health+activity+V3, sequential)")
+        val para = SyncPara().apply {
+            // Config sync *pushes* phone settings to the watch; we only read health, and on this
+            // device it fails ("sync config failed!13"), so skip it (VeryFit's restart path does
+            // the same). The data tasks are unaffected.
+            isNeedSyncConfigData = false
+            timeoutMillisecond = 300_000L    // 5 min, matching VeryFit's home-sync timeout
+            iSyncProgressListener = syncProgressListener
+            iSyncDataListener = syncDataListener
+        }
+        BLEManager.syncAllData(para)
     }
 
     private fun registerCallbacks() {
@@ -142,9 +157,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerConnectCallBack(connectCallBack)
         cm.registerBindCallBack(bindCallBack)
         cm.registerGetDeviceInfoCallBack(deviceInfoCallBack)
-        cm.registerSyncActivityCallBack(activityCallBack)
-        cm.registerSyncHealthCallBack(healthCallBack)
-        // NEXT: cm.registerSyncV3CallBack(v3CallBack) for SpO2/body-composition/stress/etc.
+        // NOTE: no registerSyncActivity/HealthCallBack here. The orchestrated syncAllData() path
+        // delivers every record through the SyncPara.ISyncDataListener (syncDataListener) below;
+        // registering the CallBackManager SyncCallBacks too would double-deliver each record.
     }
 
     // ── Scan → connect → bind lifecycle ──────────────────────────────────────────────
@@ -246,24 +261,32 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
     }
 
-    // ── SDK callbacks (v2) ────────────────────────────────────────────────────────
+    // ── Orchestrated sync listeners (BLEManager.syncAllData) ──────────────────────────
 
-    private val activityCallBack = object : SyncCallBack.IActivityCallBack {
-        override fun onStart() {}
-        override fun onStop() {}
-        override fun onSuccess() {}
-        override fun onFailed() { listener?.onSyncFailed() }
-        override fun onGetActivityData(data: HealthActivity?) {
-            data?.let { listener?.onActivityDay(it.toDomain()) }
+    /** Lifecycle of the whole ordered sync run (config → health → activity → V3). */
+    private val syncProgressListener = object : ISyncProgressListener {
+        override fun onStart() { Log.i(TAG, "syncAllData onStart") }
+        override fun onProgress(percent: Int) { listener?.onSyncProgress(percent) }
+        override fun onSuccess() {
+            Log.i(TAG, "syncAllData onSuccess")
+            listener?.onSyncComplete()
+        }
+        override fun onFailed(type: SyncPara.SyncFailedType?) {
+            Log.w(TAG, "syncAllData onFailed: $type")
+            listener?.onSyncFailed()
         }
     }
 
-    private val healthCallBack = object : SyncCallBack.IHealthCallBack {
-        override fun onStart() {}
-        override fun onStop() {}
-        override fun onSuccess() { listener?.onSyncComplete() }
-        override fun onFailed() { listener?.onSyncFailed() }
-        override fun onProgress(percent: Int) { listener?.onSyncProgress(percent) }
+    /**
+     * Receives every decoded record from the orchestrated sync. The v2 metrics we ship today
+     * (daily activity, heart-rate summary, sleep) are mapped to domain; workouts, BP, and the full
+     * V3 metric set are no-op sinks for now — wiring them is W6 and only needs a body here, since
+     * the data already arrives through this one listener.
+     */
+    private val syncDataListener = object : ISyncDataListener {
+        override fun onGetActivityData(data: HealthActivity?) {
+            data?.let { listener?.onActivityDay(it.toDomain()) }
+        }
 
         override fun onGetHeartRateData(
             data: HealthHeartRate?,
@@ -285,9 +308,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items: MutableList<HealthSportItem>?,
             isLast: Boolean,
         ) {
-            // Workout sessions — mapping deferred with the V3 metrics (needs the watch_workout
-            // schema + confirmed HealthSport field set). Logged for now so we can see them land.
-            if (data != null) Log.d(TAG, "onGetSportData (workout) received — mapping deferred")
+            if (data != null) Log.d(TAG, "onGetSportData (workout) — mapping deferred (W6)")
         }
 
         override fun onGetBloodPressureData(
@@ -295,8 +316,29 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items: MutableList<HealthBloodPressedItem>?,
             isLast: Boolean,
         ) {
-            if (data != null) Log.d(TAG, "onGetBloodPressureData received — mapping deferred")
+            if (data != null) Log.d(TAG, "onGetBloodPressureData — mapping deferred (W6)")
         }
+
+        // ── V3 metrics + GPS + drink plan: deferred (W6); no-op sinks so the data is consumed ──
+        override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
+        override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
+        override fun onGetHealthActivityV3Data(data: com.ido.ble.data.manage.database.HealthActivityV3?) {}
+        override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
+        override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {}
+        override fun onGetHealthBodyPower(data: com.ido.ble.data.manage.database.HealthBodyPower?) {}
+        override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {}
+        override fun onGetHealthHRV(data: com.ido.ble.data.manage.database.HealthHRVdata?) {}
+        override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {}
+        override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {}
+        override fun onGetHealthPressureData(data: com.ido.ble.data.manage.database.HealthPressure?, items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?, isLast: Boolean) {}
+        override fun onGetHealthRespiratoryRate(data: com.ido.ble.data.manage.database.HealthRespiratoryRate?) {}
+        override fun onGetHealthSleepV3Data(data: com.ido.ble.data.manage.database.HealthSleepV3?) {}
+        override fun onGetHealthSpO2Data(data: com.ido.ble.data.manage.database.HealthSpO2?, items: MutableList<com.ido.ble.data.manage.database.HealthSpO2Item>?, isLast: Boolean) {}
+        override fun onGetHealthSportV3Data(data: com.ido.ble.data.manage.database.HealthSportV3?) {}
+        override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {}
+        override fun onGetHealthTemperature(data: com.ido.ble.data.manage.database.HealthTemperature?) {}
+        override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {}
+        override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {}
     }
 
     // ── Mappers (SDK type → domain) ─────────────────────────────────────────────────
