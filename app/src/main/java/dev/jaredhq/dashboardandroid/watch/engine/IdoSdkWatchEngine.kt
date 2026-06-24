@@ -6,8 +6,10 @@ import com.ido.ble.BLEManager
 import com.ido.ble.InitParam
 import com.ido.ble.bluetooth.connect.ConnectFailedReason
 import com.ido.ble.bluetooth.device.BLEDevice
+import com.ido.ble.callback.BindCallBack
 import com.ido.ble.callback.CallBackManager
 import com.ido.ble.callback.ConnectCallBack
+import com.ido.ble.callback.ScanCallBack
 import com.ido.ble.callback.SyncCallBack
 import com.ido.ble.data.manage.database.HealthActivity
 import com.ido.ble.data.manage.database.HealthBloodPressed
@@ -79,9 +81,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         log_save_days = 3
     }
 
+    @Volatile
+    private var targetMac: String? = null
+
     override fun connect(macAddress: String) {
-        Log.i(TAG, "connect($macAddress)")
-        BLEManager.autoConnect(macAddress)
+        // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
+        // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
+        targetMac = macAddress.uppercase()
+        Log.i(TAG, "connect($macAddress) → scanning to find + bind")
+        BLEManager.startScanDevices()
     }
 
     override fun disconnect() {
@@ -103,13 +111,29 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun registerCallbacks() {
         val cm = CallBackManager.getManager()
+        cm.registerScanCallBack(scanCallBack)
         cm.registerConnectCallBack(connectCallBack)
+        cm.registerBindCallBack(bindCallBack)
         cm.registerSyncActivityCallBack(activityCallBack)
         cm.registerSyncHealthCallBack(healthCallBack)
         // NEXT: cm.registerSyncV3CallBack(v3CallBack) for SpO2/body-composition/stress/etc.
     }
 
-    // ── Connection lifecycle ────────────────────────────────────────────────────────
+    // ── Scan → connect → bind lifecycle ──────────────────────────────────────────────
+
+    private val scanCallBack = object : ScanCallBack.ICallBack {
+        override fun onStart() { Log.i(TAG, "scan started (target=$targetMac)") }
+        override fun onScanFinished() { Log.i(TAG, "scan finished") }
+        override fun onFindDevice(device: BLEDevice?) {
+            val addr = device?.mDeviceAddress ?: return
+            Log.d(TAG, "found '${device.mDeviceName}' $addr rssi=${device.mRssi}")
+            if (addr.equals(targetMac, ignoreCase = true)) {
+                Log.i(TAG, "target watch found → stop scan + connect")
+                BLEManager.stopScanDevices()
+                BLEManager.connect(device)
+            }
+        }
+    }
 
     private val connectCallBack = object : ConnectCallBack.ICallBack {
         override fun onConnectStart(mac: String?) { Log.i(TAG, "onConnectStart $mac") }
@@ -117,20 +141,31 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
 
         override fun onConnectSuccess(mac: String?) {
-            Log.i(TAG, "onConnectSuccess $mac — bound=${runCatching { BLEManager.isBind() }.getOrNull()}")
+            val bound = runCatching { BLEManager.isBind() }.getOrDefault(false)
+            Log.i(TAG, "onConnectSuccess $mac bound=$bound")
+            if (!bound) {
+                // Fresh SDK DB isn't bound to this watch (VeryFit owns the original bond).
+                // Bind to claim it — may prompt a confirmation on the watch face (onNeedAuth).
+                Log.i(TAG, "not bound → bind()")
+                BLEManager.bind()
+            }
         }
 
         override fun onInitCompleted(mac: String?) {
-            // SDK has finished its post-connect handshake and is ready for commands.
-            Log.i(TAG, "onInitCompleted $mac — starting health sync")
-            syncHealth()
+            // onInitCompleted fires ~immediately after connect — BEFORE an in-progress bind()
+            // completes (~8s later). Syncing here on an unbound device times out. So only sync
+            // now if already bound (the reconnect case); a fresh bind syncs from onSuccess below.
+            val bound = runCatching { BLEManager.isBind() }.getOrDefault(false)
+            if (bound) {
+                Log.i(TAG, "onInitCompleted $mac (bound) — starting health sync")
+                syncHealth()
+            } else {
+                Log.i(TAG, "onInitCompleted $mac — awaiting bind before sync")
+            }
         }
 
         override fun onDeviceInNotBindStatus(mac: String?) {
-            // Our SDK instance has a fresh DB and isn't bound to this watch yet (VeryFit owns
-            // the original bond). Bind so the watch will release its data to us.
-            Log.i(TAG, "onDeviceInNotBindStatus $mac — calling bind()")
-            BLEManager.bind()
+            Log.i(TAG, "onDeviceInNotBindStatus $mac (bind() driven from onConnectSuccess)")
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
@@ -140,6 +175,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         override fun onConnectBreak(mac: String?) { Log.w(TAG, "onConnectBreak $mac") }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
+    }
+
+    private val bindCallBack = object : BindCallBack.ICallBack {
+        override fun onSuccess() {
+            Log.i(TAG, "BIND SUCCESS — watch claimed by our app; starting health sync")
+            // Now that bind has actually completed, the device will release its data. Give the
+            // link a beat to settle (Classic profiles re-attach right after bind) then sync.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ syncHealth() }, 1_500)
+        }
+        override fun onNeedAuth(code: Int) {
+            Log.w(TAG, "BIND needs confirmation on the WATCH FACE now (code=$code) — tap to allow")
+        }
+        override fun onReject() { Log.w(TAG, "bind REJECTED on the watch") }
+        override fun onCancel() { Log.w(TAG, "bind cancelled") }
+        override fun onFailed(error: BindCallBack.BindFailedError?) {
+            Log.w(TAG, "bind FAILED: $error")
+            listener?.onSyncFailed()
+        }
     }
 
     // ── SDK callbacks (v2) ────────────────────────────────────────────────────────
