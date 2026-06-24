@@ -42,7 +42,7 @@ Watch slices (new ladder):
 | W3 — On-device: SDK init + scan + connect + **bind** | ✅ **verified on Galaxy S21 / Android 14** (bind persists, `bound=true`) |
 | W4 — On-device: health **sync completes** → steps/HR/sleep callbacks | ✅ **data flows on device** via VeryFit's `syncAllData(SyncPara)` orchestration — `status = 3` NAK fixed by syncing sequentially. Watch streams real data; `SyncV3HealthTask onSuccess`. (Run still ends `ERROR_SYNC_TASK_FAILED` from a benign post-transfer conn-param step — data already delivered.) |
 | W5 — Health upload: domain → DTO → `POST /api/widget/v1/watch/health/*` (+ dashboard route/schema/migration) | ▶ next |
-| W6 — V3 metrics (SpO2, body comp, stress/HRV, temperature, respiratory rate, BP V3) via `ISyncDataListener` V3 callbacks | ▶ **promoted — this watch is V3-only for health** (see blockers) |
+| W6 — V3 metrics via `ISyncDataListener` V3 callbacks | 🔶 **in progress** — `HealthSleepV3`→`WatchSleepSession` and `HealthActivityV3`→ new `WatchWorkout` mapped (empty-record guarded); sport-session / HRV / respiratory / body-power / SpO2 / temperature still logged-only (need domain models + dashboard columns) |
 | W7 — Other functions already in the lift: notifications, calls, DFU, watch faces (wire `BLEManager` calls) | later |
 | W8 — Clean-room replacement of high-value paths, using the SDK as oracle | later |
 
