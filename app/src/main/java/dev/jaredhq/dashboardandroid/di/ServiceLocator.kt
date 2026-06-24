@@ -13,6 +13,8 @@ import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import dev.jaredhq.dashboardandroid.ble.WatchBleManager
+import dev.jaredhq.dashboardandroid.watch.engine.IdoSdkWatchEngine
+import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.work.WatchSyncScheduler
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
@@ -44,6 +46,14 @@ object ServiceLocator {
     lateinit var watchBleManager: WatchBleManager
         private set
 
+    /**
+     * The active watch data engine (ADR 0001). Currently the vendored-SDK engine
+     * ([IdoSdkWatchEngine]); a clean-room engine can be swapped in here behind the same
+     * [WatchEngine] interface without touching callers.
+     */
+    lateinit var watchEngine: WatchEngine
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -71,6 +81,17 @@ object ServiceLocator {
                 // Auto-upload telemetry whenever the connection state changes
                 // (connect/disconnect/error) — the worker no-ops if unconfigured.
                 onConnectionEvent = { WatchSyncScheduler.syncNow(appContext) }
+            }
+
+            // Vendored-SDK engine (ADR 0001). init() is idempotent; it loads the native lib
+            // + opens the SDK's own DB once at startup. Guarded so a native-load/SDK-init
+            // failure degrades the watch feature rather than crashing app startup.
+            val application = appContext as? android.app.Application
+                ?: throw IllegalStateException("ServiceLocator must be initialised with the Application context")
+            watchEngine = IdoSdkWatchEngine(application).also {
+                runCatching { it.init() }.onFailure { e ->
+                    android.util.Log.e("ServiceLocator", "Watch engine init failed", e)
+                }
             }
 
             initialized = true
