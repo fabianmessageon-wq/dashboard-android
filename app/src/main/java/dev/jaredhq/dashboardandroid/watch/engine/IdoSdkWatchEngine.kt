@@ -447,6 +447,48 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             }
         }
 
+        // V3 blood pressure → one WatchBloodPressureReading per sample. Each item carries
+        // sys_blood/dias_blood (mmHg) and an `offset` minute within the parent day; resolved like the
+        // other point metrics as (day start_time + offset) minutes from midnight (the offset-unit
+        // caveat applies; the date prefix is always exact). Skip sentinel/zero rows.
+        override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            data.items.forEach { item ->
+                if (item.sys_blood <= 0 || item.dias_blood <= 0) return@forEach
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onBloodPressureReading(
+                        WatchBloodPressureReading(
+                            recordedAt = ts,
+                            systolic = item.sys_blood,
+                            diastolic = item.dias_blood,
+                        )
+                    )
+                }
+            }
+        }
+
+        // IDO "pressure" is the mental-stress metric (0–100); each item is one sample with a value and
+        // an `offset` minute from the day's startTime. Emit one WatchStressReading per item.
+        // (HealthV3EmotionHealth is a *categorical* mood code — PLEASANT/CALM/UNPLEASANT — not a 0–100
+        // score, so it is intentionally NOT mapped here; it stays logged-only.)
+        override fun onGetHealthPressureData(
+            data: com.ido.ble.data.manage.database.HealthPressure?,
+            items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?,
+            isLast: Boolean,
+        ) {
+            if (data == null || data.year == 0 || items.isNullOrEmpty()) return
+            items.forEach { item ->
+                if (item.value <= 0) return@forEach
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.startTime + item.offset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onStressReading(WatchStressReading(recordedAt = ts, stressScore = item.value))
+                }
+            }
+        }
+
         // V3 daily activity rollup → WatchActivityDay. This V3-only watch never fires the v2
         // onGetActivityData, so HealthSportV3's day totals are THE source of daily steps/distance/
         // calories. We map the day totals (the per-minute `items` buckets are ignored) and reuse the
@@ -457,16 +499,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onActivityDay(data.toActivityDay())
         }
 
-        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, BP V3,
-        // body composition, noise, pressure, swimming, ECG, emotion-health. ──
+        // ── Still logged-only — no domain model / dashboard column yet, or no clean mapping:
+        //   GPS, drink plan, body composition (needs a paired bio-impedance scale + int→real value
+        //   scale to confirm — won't fire on a wrist watch), noise, swimming, ECG, second-by-second
+        //   HR, and emotion-health (a categorical mood code, not a 0–100 score). ──
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
-        override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
         override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {}
         override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {}
         override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {}
         override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {}
-        override fun onGetHealthPressureData(data: com.ido.ble.data.manage.database.HealthPressure?, items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?, isLast: Boolean) {}
         override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {}
         override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {}
         override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {}
@@ -590,6 +632,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onRespiratoryReading(reading: WatchRespiratoryReading) { Log.i(TAG, "RESP $reading") }
         override fun onTemperatureReading(reading: WatchTemperatureReading) { Log.i(TAG, "TEMP $reading") }
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { Log.i(TAG, "BODY_ENERGY $reading") }
+        override fun onBloodPressureReading(reading: WatchBloodPressureReading) { Log.i(TAG, "BLOOD_PRESSURE $reading") }
+        override fun onStressReading(reading: WatchStressReading) { Log.i(TAG, "STRESS $reading") }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }

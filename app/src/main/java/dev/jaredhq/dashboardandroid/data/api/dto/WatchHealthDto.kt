@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.data.api.dto
 
 import dev.jaredhq.dashboardandroid.watch.engine.WatchActivityDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
@@ -9,6 +10,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
 import kotlinx.serialization.Serializable
@@ -40,6 +42,8 @@ data class WatchHealthUploadDto(
     val respiratoryReadings: List<WatchRespiratoryReadingDto> = emptyList(),
     val temperatureReadings: List<WatchTemperatureReadingDto> = emptyList(),
     val bodyEnergyReadings: List<WatchBodyEnergyReadingDto> = emptyList(),
+    val bloodPressureReadings: List<WatchBloodPressureReadingDto> = emptyList(),
+    val stressReadings: List<WatchStressReadingDto> = emptyList(),
 )
 
 @Serializable
@@ -145,6 +149,21 @@ data class WatchBodyEnergyReadingDto(
     val energy: Int,
 )
 
+@Serializable
+data class WatchBloodPressureReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val systolic: Int,
+    val diastolic: Int,
+)
+
+@Serializable
+data class WatchStressReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val stressScore: Int,
+)
+
 /**
  * Server acknowledgement. Defensively defaulted like the other widget DTOs so a contract skew (or
  * an empty 2xx body) degrades to "accepted" rather than failing the sync.
@@ -168,6 +187,8 @@ fun WatchHealthBatch.toDto(): WatchHealthUploadDto = WatchHealthUploadDto(
     respiratoryReadings = respiratoryReadings.map { it.toDto() },
     temperatureReadings = temperatureReadings.map { it.toDto() },
     bodyEnergyReadings = bodyEnergyReadings.map { it.toDto() },
+    bloodPressureReadings = bloodPressureReadings.map { it.toDto() },
+    stressReadings = stressReadings.map { it.toDto() },
 )
 
 private fun WatchActivityDay.toDto() = WatchActivityDayDto(
@@ -259,6 +280,19 @@ private fun WatchBodyEnergyReading.toDto() = WatchBodyEnergyReadingDto(
     date = recordedAt.take(10),
     recordedAt = localWallClockEpochSeconds(recordedAt),
     energy = energy,
+)
+
+private fun WatchBloodPressureReading.toDto() = WatchBloodPressureReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    systolic = systolic,
+    diastolic = diastolic,
+)
+
+private fun WatchStressReading.toDto() = WatchStressReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    stressScore = stressScore,
 )
 
 /**

@@ -125,6 +125,19 @@ data class WatchBodyEnergyReading(
     val energy: Int,
 )
 
+/** A single blood-pressure sample (systolic/diastolic, mmHg) from the V3 BP path. */
+data class WatchBloodPressureReading(
+    val recordedAt: String,
+    val systolic: Int,
+    val diastolic: Int,
+)
+
+/** A single stress sample (0–100) from the IDO "pressure" metric. */
+data class WatchStressReading(
+    val recordedAt: String,
+    val stressScore: Int,
+)
+
 /**
  * Listener for decoded health data emitted by a [WatchEngine] during a sync.
  *
@@ -145,6 +158,8 @@ interface WatchHealthListener {
     fun onRespiratoryReading(reading: WatchRespiratoryReading) {}
     fun onTemperatureReading(reading: WatchTemperatureReading) {}
     fun onBodyEnergyReading(reading: WatchBodyEnergyReading) {}
+    fun onBloodPressureReading(reading: WatchBloodPressureReading) {}
+    fun onStressReading(reading: WatchStressReading) {}
 
     fun onSyncProgress(percent: Int) {}
     fun onSyncComplete() {}
@@ -166,18 +181,22 @@ data class WatchHealthBatch(
     val respiratoryReadings: List<WatchRespiratoryReading> = emptyList(),
     val temperatureReadings: List<WatchTemperatureReading> = emptyList(),
     val bodyEnergyReadings: List<WatchBodyEnergyReading> = emptyList(),
+    val bloodPressureReadings: List<WatchBloodPressureReading> = emptyList(),
+    val stressReadings: List<WatchStressReading> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = activityDays.isEmpty() && heartRateDays.isEmpty() &&
             sleepSessions.isEmpty() && workouts.isEmpty() &&
             spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
             respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
-            bodyEnergyReadings.isEmpty()
+            bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
+            stressReadings.isEmpty()
 
     val recordCount: Int
         get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size +
             spo2Readings.size + hrvReadings.size + respiratoryReadings.size +
-            temperatureReadings.size + bodyEnergyReadings.size
+            temperatureReadings.size + bodyEnergyReadings.size +
+            bloodPressureReadings.size + stressReadings.size
 }
 
 /** Server acknowledgement of a [WatchHealthBatch] upload. */
