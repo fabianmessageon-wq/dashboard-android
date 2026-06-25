@@ -47,6 +47,7 @@ import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthScreen
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
+import dev.jaredhq.dashboardandroid.work.WatchConnectionService
 
 class MainActivity : ComponentActivity() {
 
@@ -65,6 +66,14 @@ class MainActivity : ComponentActivity() {
                 AppRoot(startRoute)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Start (or stop) the always-on watch link from a foreground context — required by Android
+        // 12+ FGS-start limits. It self-gates on the mirror opt-in + a configured dashboard, so this
+        // is a no-op (stop) until the user grants notification access on the Settings → mirror card.
+        runCatching { WatchConnectionService.syncRunState(this) }
     }
 
     override fun onNewIntent(intent: Intent) {

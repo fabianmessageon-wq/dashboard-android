@@ -11,4 +11,8 @@
 
     <!-- NotificationListenerService that mirrors calls/SMS to the watch (W7). -->
     <string name="watch_notification_listener_label">Mirror calls &amp; texts to watch</string>
+
+    <!-- Ongoing notification for the always-on watch-connection service (W7). -->
+    <string name="channel_watch_link_name">Watch connection</string>
+    <string name="channel_watch_link_desc">Keeps your watch linked so calls and texts can be mirrored.</string>
 </resources>
