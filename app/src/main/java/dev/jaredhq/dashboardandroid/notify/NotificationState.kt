@@ -40,6 +40,24 @@ class NotificationState(context: Context) {
         prefs.edit().putString(KEY_WATCH_QUOTE_DATE, date).commit()
     }
 
+    /**
+     * Whether reminder [id] has already been pushed to the **watch** today. Like
+     * [quoteAlreadyPushedToWatch], a separate per-day set from the native channel ([reminderAlreadyShown])
+     * so the two never suppress each other (W7).
+     */
+    fun reminderAlreadyPushedToWatch(date: String, id: String): Boolean {
+        syncWatchDate(date)
+        return prefs.getStringSet(KEY_WATCH_SHOWN, emptySet())!!.contains(id)
+    }
+
+    fun markReminderPushedToWatch(date: String, id: String) {
+        syncWatchDate(date)
+        val updated = HashSet(prefs.getStringSet(KEY_WATCH_SHOWN, emptySet())!!)
+        updated.add(id)
+        // commit() (synchronous): durable before the worker finishes, like markReminderShown.
+        prefs.edit().putStringSet(KEY_WATCH_SHOWN, updated).commit()
+    }
+
     fun reminderAlreadyShown(date: String, id: String): Boolean {
         syncDate(date)
         return prefs.getStringSet(KEY_SHOWN, emptySet())!!.contains(id)
@@ -66,11 +84,23 @@ class NotificationState(context: Context) {
         }
     }
 
+    /** Reset the per-day watch-pushed set when the civil date changes (parallels [syncDate]). */
+    private fun syncWatchDate(date: String) {
+        if (prefs.getString(KEY_WATCH_SHOWN_DATE, null) != date) {
+            prefs.edit()
+                .putString(KEY_WATCH_SHOWN_DATE, date)
+                .putStringSet(KEY_WATCH_SHOWN, emptySet())
+                .apply()
+        }
+    }
+
     private companion object {
         const val FILE = "dashboard_notify_state"
         const val KEY_QUOTE_DATE = "quote_date"
         const val KEY_WATCH_QUOTE_DATE = "watch_quote_date"
         const val KEY_SHOWN_DATE = "shown_date"
         const val KEY_SHOWN = "shown_ids"
+        const val KEY_WATCH_SHOWN_DATE = "watch_shown_date"
+        const val KEY_WATCH_SHOWN = "watch_shown_ids"
     }
 }
