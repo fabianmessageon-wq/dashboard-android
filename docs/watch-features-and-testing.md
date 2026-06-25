@@ -39,6 +39,10 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 5. **Always-on link** — `WatchConnectionService` (a `connectedDevice` foreground service) keeps the
    watch connected with auto-reconnect so calls/texts mirror in real time, and triggers a 6 h
    periodic health sync. Gated on the mirror opt-in + a configured dashboard; self-stops otherwise.
+6. **Boot receiver** — `BootReceiver` re-arms `WatchConnectionService` after a reboot or app update
+   (`BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`) via the same `syncRunState` gate, so the always-on link
+   returns without reopening the app. (`connectedDevice` is not blocked from `BOOT_COMPLETED` on
+   Android 14.)
 
 ---
 
@@ -99,6 +103,17 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 3. Mute is best-effort (`silenceRinger`) and may no-op unless the app is the default dialer — answer
    and reject are the primary controls.
 
+### 6. Boot / update re-arm (W7)
+1. With mirroring on (notification access granted + dashboard configured) and the ongoing "Watch
+   connected" notification showing, **reboot the phone** (don't reopen the app afterward).
+2. After unlock, the always-on service should come back on its own: the ongoing notification
+   reappears and the watch links — logcat `WatchBootReceiver re-arming watch link after android.intent.action.BOOT_COMPLETED`
+   then `WatchConnService maintaining link`. (`adb logcat -s WatchBootReceiver WatchConnService`.)
+3. App-update path: `:app:installDebug` over an existing install fires `MY_PACKAGE_REPLACED` — the
+   service should likewise re-arm without opening the app.
+4. Negative check: with mirroring **off** (revoke notification access), reboot → the receiver runs
+   but `syncRunState` stops the service, so no ongoing notification appears.
+
 ### What to capture if something fails
 - `adb logcat` around the action (the tags above).
 - Pull the SDK protocol log: `adb pull /sdcard/Android/data/dev.jaredhq.dashboardandroid/files/ido-logs/`
@@ -109,8 +124,9 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 ## Known limitations (by design, for now)
 - **Call control needs `ANSWER_PHONE_CALLS`** — granted at runtime when mirroring is on; if denied,
   calls mirror display-only. `endCall` (reject) is API 28+; mute is best-effort.
-- **No boot receiver** — the always-on link re-arms when the app is next opened, not automatically
-  after a reboot.
+- **Boot/update re-arm is on-device-unverified** — `BootReceiver` should restart the always-on link
+  after a reboot or app update, but this hasn't been confirmed on hardware (see step 6 below). It
+  only fires for users who already enabled mirroring; everyone else's receiver no-ops via the gate.
 - **Message path is capability-guessed** — if the Active 4 Pro accepts only one of the two message
   paths, the branch may need adjusting after the first on-device run (one-line change).
 - **Dashboard branch** `w6/watch-bp-stress` is not merged/deployed; the BP unique index needs

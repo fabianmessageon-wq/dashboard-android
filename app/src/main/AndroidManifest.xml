@@ -16,6 +16,9 @@
     <!-- Answer / reject an incoming call from the watch (W7 call control). Requested at runtime when
          the user has enabled call/text mirroring; if denied, calls mirror display-only. -->
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <!-- Re-arm the always-on watch link after a reboot/update (W7 BootReceiver), so calls/texts keep
+         mirroring without the user reopening the app. The receiver self-gates via syncRunState. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- BLE permissions — Android 12+ (API 31) uses BLUETOOTH_SCAN / BLUETOOTH_CONNECT.
          Runtime-requested on the Watch tab; BLUETOOTH / BLUETOOTH_ADMIN are for API < 31. -->
@@ -111,6 +114,18 @@
             android:name=".work.WatchConnectionService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Re-arms WatchConnectionService after a reboot or app update (W7), so the always-on link
+             returns without the user reopening the app. exported=true because the sender is the
+             system; both actions are protected broadcasts. Self-gates via syncRunState. -->
+        <receiver
+            android:name=".work.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
