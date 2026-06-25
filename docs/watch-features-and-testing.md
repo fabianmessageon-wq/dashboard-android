@@ -51,8 +51,14 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 ### 0. Prerequisites
 - Build/install the debug app:
   `JAVA_HOME=<Android Studio>/jbr ./gradlew.bat :app:installDebug` (or run from Android Studio).
-- Wireless ADB at `192.168.20.100:40367` (rediscover via `adb mdns services` if dropped; do **not**
-  `adb usb` — it drops the wireless link).
+  - ⚠ If install fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE … signatures do not match`, the
+    on-device build came from a **different debug keystore** (another machine/session). Do a one-time
+    `adb uninstall dev.jaredhq.dashboardandroid` then reinstall. **Note:** uninstall wipes the app's
+    settings/token **and** the SDK's local bind record — so the Active 4 Pro will need re-pairing
+    (Watch tab → Connect → confirm on watch). Do this deliberately at the **start** of a hardware
+    session, not mid-test.
+- Wireless ADB at `192.168.20.100` (port rotates — rediscover via `adb mdns services`; the phone is
+  `R5CR20XQLRW`). Do **not** `adb usb` — it drops the wireless link.
 - **Force-stop VeryFit** (`com.watch.life`) first — it will hold/claim the watch otherwise. The watch
   is bound to *this* app now; reopen VeryFit to re-pair it back if needed.
 - In the app: Settings → set the dashboard URL + a device token (actions scope), **Test connection**.
