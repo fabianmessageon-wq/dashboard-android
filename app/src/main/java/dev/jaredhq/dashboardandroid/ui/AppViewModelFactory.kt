@@ -7,7 +7,6 @@ import dev.jaredhq.dashboardandroid.ui.capture.CaptureViewModel
 import dev.jaredhq.dashboardandroid.ui.settings.SettingsViewModel
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
-import dev.jaredhq.dashboardandroid.ui.watch.WatchViewModel
 
 /**
  * One factory for the app's handful of ViewModels, pulling dependencies from the
@@ -28,8 +27,6 @@ class AppViewModelFactory : ViewModelProvider.Factory {
                 deviceId = ServiceLocator.watchDeviceId,
                 registerUiListener = { ServiceLocator.watchUiListener = it },
             ) as T
-        modelClass.isAssignableFrom(WatchViewModel::class.java) ->
-            WatchViewModel(ServiceLocator.watchBleManager) as T
         else -> throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
     }
 }

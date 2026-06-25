@@ -26,8 +26,8 @@ import java.time.format.DateTimeFormatter
  * sessions. The server upserts day-keyed records by `(user, date)` and workouts by
  * `(user, startedAt)`, so re-uploading the same sync is idempotent.
  *
- * Health-only: unlike [WatchSyncDto] (Phase-2 connection telemetry) this carries no raw protocol
- * events. All metric fields are nullable — the watch reports 0/absent for unmeasured values and the
+ * Health-only: this carries no raw protocol events — only decoded metrics. All metric fields are
+ * nullable — the watch reports 0/absent for unmeasured values and the
  * engine mappers surface those as null.
  */
 @Serializable

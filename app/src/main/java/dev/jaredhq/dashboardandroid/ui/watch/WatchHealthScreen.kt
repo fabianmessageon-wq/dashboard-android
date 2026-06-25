@@ -47,8 +47,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState.SYNC
 
 /**
  * The product Watch screen — connection + health sync, driven by the [WatchEngine] boundary
- * (the vendored-SDK engine today). Distinct from the clean-room BLE debug console
- * ([WatchScreen]/[WatchViewModel]), which is retained as a dev-only tool.
+ * (the vendored-SDK engine today).
  *
  * Requests Bluetooth permissions on first show, then surfaces the connection lifecycle and lets
  * the user connect/disconnect and trigger a sync; a synced run's record counts confirm data flowed.

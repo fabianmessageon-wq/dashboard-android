@@ -17,7 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Background health sync: connects to the watch via the [WatchEngine] boundary and lets a full
  * sync run, so health data trickles up even if the user never opens the Watch tab.
  *
- * This replaces the old Phase-2 telemetry upload (battery/MTU via `WatchBleManager`). The engine's
+ * This replaces the old Phase-2 connection-telemetry upload. The engine's
  * connect path auto-runs the sync after (re)bind, and the engine's own upload listener
  * (`UploadingWatchHealthListener`) pushes the decoded records to the dashboard and owns upload
  * retry — so this worker only has to drive the connection and wait for the run to finish.

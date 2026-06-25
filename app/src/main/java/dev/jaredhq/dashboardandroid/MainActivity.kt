@@ -252,8 +252,6 @@ private fun AppRoot(startRoute: MutableState<String?>) {
             }
             composable(Tab.Watch.route) {
                 // Product Watch screen, driven by the WatchEngine boundary (vendored-SDK engine).
-                // The clean-room BLE debug console (WatchScreen/WatchViewModel) is retained for a
-                // future hidden dev entry point and no longer wired into the nav graph.
                 val vm: WatchHealthViewModel = viewModel(factory = factory)
                 val state by vm.state.collectAsStateWithLifecycle()
                 WatchHealthScreen(

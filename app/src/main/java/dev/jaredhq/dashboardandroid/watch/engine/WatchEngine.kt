@@ -6,8 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
  * Coarse connection lifecycle of a [WatchEngine], surfaced to the UI via
  * [WatchEngine.connectionState].
  *
- * Deliberately minimal and engine-agnostic: it carries no transport detail (the clean-room
- * `ble.WatchConnectionState` keeps GATT/MTU/raw-packet fields for the debug console). The product
+ * Deliberately minimal and engine-agnostic: it carries no transport detail. The product
  * Watch screen renders connection + sync progress from these states; any richer per-engine detail
  * stays behind the boundary. [isConnected] is true for [CONNECTED] and [SYNCING] (and transiently
  * for [BINDING]); this flow adds the finer steps the UI needs.
@@ -39,15 +38,12 @@ enum class WatchEngineConnectionState {
  * The watch integration boundary (ADR 0001).
  *
  * Everything above this interface speaks only the app's own domain types
- * ([WatchActivityDay], [WatchHeartRateDay], [WatchSleepSession], …). Two implementations
- * exist:
+ * ([WatchActivityDay], [WatchHeartRateDay], [WatchSleepSession], …). The active implementation
+ * is [IdoSdkWatchEngine], which wraps the vendored IDO/VeryFit SDK — the ONLY place
+ * `com.ido.*` / `com.veryfit.*` may be imported.
  *
- *  - [IdoSdkWatchEngine] — wraps the vendored IDO/VeryFit SDK (the active engine for the
- *    private build). The ONLY place `com.ido.*` / `com.veryfit.*` may be imported.
- *  - a future `CleanRoomWatchEngine` — the existing direct-BLE clean-room code
- *    (`WatchBleManager`/`WatchProtocol`), retained as the long-term independent path.
- *
- * Keeping the SDK behind this seam makes "clean-room later" a swap, not a rewrite.
+ * Keeping the SDK behind this seam means another engine (e.g. a future clean-room one) can be
+ * swapped in without touching callers.
  */
 interface WatchEngine {
 

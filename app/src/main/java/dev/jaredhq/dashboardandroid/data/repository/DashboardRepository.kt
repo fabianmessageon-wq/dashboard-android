@@ -8,8 +8,6 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
-import dev.jaredhq.dashboardandroid.domain.model.WatchSyncRequest
-import dev.jaredhq.dashboardandroid.domain.model.WatchSyncResult
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 
@@ -123,13 +121,6 @@ class DashboardRepository(
      */
     suspend fun chat(message: String): Result<CaptureResult> =
         runApi { client().chat(message).also { cache.save(it.today) } }
-
-    /**
-     * Upload watch connection/device telemetry (Phase 2). Read-only with respect
-     * to the Today cache — this is a side-channel that never touches Today state.
-     */
-    suspend fun syncWatch(request: WatchSyncRequest): Result<WatchSyncResult> =
-        runApi { client().syncWatch(request) }
 
     /** Upload a batch of decoded watch health records (activity/HR/sleep/workouts). */
     suspend fun uploadWatchHealth(batch: WatchHealthBatch): Result<WatchHealthUploadResult> =

@@ -94,20 +94,24 @@ persisted across launches).
    updates. Also seen but non-blocking: `sync config failed!13` (now skipped via
    `isNeedSyncConfigData=false`).
 
-### ⚠ Two BLE stacks coexist (interference risk + planned UI rework)
+### ✅ Single watch stack (old clean-room BLE stack removed 2026-06-25)
 
-The old clean-room manual-BLE stack was **not** replaced by the vendored SDK — both are live:
-- **Old:** `ble/WatchBleManager` + `ble/WatchGattCallback` (raw `BluetoothGatt`, auto-connects on
-  scan match). Instantiated in `ServiceLocator` and **consumed by the UI** (`AppViewModelFactory`)
-  and the background **`WatchSyncWorker`**. This is what the current Watch UI actually drives.
-- **New:** `watch/engine/IdoSdkWatchEngine` (vendored SDK). Instantiated in `ServiceLocator` but
-  **referenced nowhere else** — only the debug auto-connect scaffold exercises it.
+The interference risk below is **resolved**: the old clean-room manual-BLE stack and its debug UI
+have been **deleted**, leaving one watch path — the vendored-SDK `watch/engine/IdoSdkWatchEngine`
+behind the `WatchEngine` interface. Removed: the whole `ble/` package (`WatchBleManager`,
+`WatchGattCallback`, `WatchProtocol`, `WatchActivityReassembler`/`Summary`, `WatchBasicInfo`,
+`WatchBatteryInfo`, `WatchConnectionState`, `WatchPacketLogger`, `WatchSyncMapper`), the debug
+console (`ui/watch/WatchScreen` + `WatchViewModel`), and the now-dead Phase-2 connection-telemetry
+upload chain it fed — `domain/WatchSyncRequest`, `data/api/dto/WatchSyncDto`, the
+`DashboardApiClient.syncWatch` / `DashboardService` `watch/sync` declaration, both client impls'
+overrides, `DashboardRepository.syncWatch`, and their tests. `assembleDebug` +
+`testDebugUnitTest` green after removal. (The dashboard server's `/api/widget/v1/watch/sync` route
+is now **orphaned** — nothing calls it; a server-side cleanup can drop it + the `watch_raw_events`
+telemetry tables later.) The historical repoint notes below are kept for context.
 
-Because each can hold an independent GATT connection to the same watch, they can contend if both
-run at once (a likely aggravator of the dual-mode instability). They didn't collide in this test
-only because the UI/worker stayed idle. **Planned:** point the Watch UI + `WatchSyncWorker` at the
-`WatchEngine` interface and retire `WatchBleManager` (or keep it solely as the future
-`CleanRoomWatchEngine` behind the same interface). Until then, avoid driving both in one session.
+> _Superseded warning (pre-removal):_ the two stacks could each hold an independent GATT link and
+> contend; the fix was to point the UI + worker at the `WatchEngine` and retire `WatchBleManager`.
+> That retirement is now done by deletion rather than retention.
 
 **Scoping (2026-06-24) — this is a redesign, not a repoint:**
 - The current **Watch screen** (`WatchViewModel` + `WatchScreen`) is a **clean-room BLE debug

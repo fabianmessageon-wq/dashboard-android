@@ -63,8 +63,8 @@ data class WatchHealthUiState(
 }
 
 /**
- * Drives the product Watch screen against the [WatchEngine] boundary (ADR 0001) — NOT the
- * clean-room `WatchBleManager` the debug console uses. It observes [WatchEngine.connectionState]
+ * Drives the product Watch screen against the [WatchEngine] boundary (ADR 0001). It observes
+ * [WatchEngine.connectionState]
  * for the lifecycle and registers a [WatchHealthListener] (via [registerUiListener]) to tally the
  * records each sync delivers, so the screen can confirm data actually flowed.
  *
