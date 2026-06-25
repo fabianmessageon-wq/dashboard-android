@@ -93,10 +93,24 @@ interface WatchEngine {
 
 /**
  * A message to surface on the watch face (W7). [appName] is shown as the source/sender label and
- * [body] as the message text. Engine-agnostic and free of any `com.ido.*` reference; the engine maps
- * it onto whatever message API the connected watch supports.
+ * [body] as the message text. [category] lets the engine pick the right on-watch message type (so an
+ * SMS or a call render as such, not a generic alert). Engine-agnostic and free of any `com.ido.*`
+ * reference; the engine maps it onto whatever message API the connected watch supports.
  */
 data class WatchNotification(
     val appName: String,
     val body: String,
+    val category: WatchNotificationCategory = WatchNotificationCategory.GENERIC,
 )
+
+/**
+ * Kind of message being mirrored, so the engine can choose the matching on-watch type. Display-only:
+ * an incoming [CALL] shows on the watch but answer/reject-from-watch (call control) is a later step.
+ */
+enum class WatchNotificationCategory {
+    GENERIC,
+    SMS,
+    EMAIL,
+    CALL,
+    MISSED_CALL,
+}

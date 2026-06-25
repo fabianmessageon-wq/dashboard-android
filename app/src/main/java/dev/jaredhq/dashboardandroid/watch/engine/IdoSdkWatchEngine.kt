@@ -151,22 +151,27 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         return try {
             // Mirror VeryFit's capability gate (MsgNotificationHelper.sendNotificationDevice): devices
             // flagged ex_table_main10_v3_notify_msg take the V3 message-notice path; the rest take the
-            // newer NewMessageInfo path. Each enumeration has its own GENERAL category code. The
-            // function table is fetched once per connected session (see [syncHealth]); if it hasn't
-            // arrived yet we fall back to the newer path (the common case).
+            // newer NewMessageInfo path. Each enumeration has its own per-category type codes (see
+            // [v3TypeFor]/[newTypeFor]), so an SMS/call renders as such on the watch. The function
+            // table is fetched once per connected session (see [syncHealth]); if it hasn't arrived yet
+            // we fall back to the newer path (the common case).
             val useOldV3 = cachedFunctionInfo?.ex_table_main10_v3_notify_msg == true
             if (useOldV3) {
                 @Suppress("DEPRECATION")
                 val notice = com.ido.ble.protocol.model.V3MessageNotice().apply {
-                    evtType = com.ido.ble.protocol.model.V3MessageNotice.TYPE_GENERAL
+                    evtType = v3TypeFor(notification.category)
                     contact = notification.appName
                     dataText = notification.body
+                    // Display-only for now: no answer/reject-from-watch (call control is a later step).
+                    supportAnswering = false
+                    supportHangUp = false
+                    supportMute = false
                 }
                 Log.i(TAG, "sendNotification (V3 notice) $notice")
                 BLEManager.setV3MessageNotice(notice)
             } else {
                 val info = com.ido.ble.protocol.model.NewMessageInfo().apply {
-                    type = com.ido.ble.protocol.model.NewMessageInfo.TYPE_GENERAL
+                    type = newTypeFor(notification.category)
                     name = notification.appName
                     content = notification.body
                 }
@@ -686,6 +691,27 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
+
+        /** Category → NewMessageInfo type (modern path). No incoming-call type exists here, so a live
+         *  CALL falls back to GENERIC and relies on the body text ("Incoming call · …"). */
+        fun newTypeFor(category: WatchNotificationCategory): Int = when (category) {
+            WatchNotificationCategory.SMS -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_SMS
+            WatchNotificationCategory.EMAIL -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_EMAIL
+            WatchNotificationCategory.MISSED_CALL -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_MISSED_CALL
+            WatchNotificationCategory.CALL, WatchNotificationCategory.GENERIC ->
+                com.ido.ble.protocol.model.NewMessageInfo.TYPE_GENERAL
+        }
+
+        /** Category → V3MessageNotice type (legacy V3 path) — this enumeration *does* have a live
+         *  TYPE_CALL, so an incoming call renders as a call there. */
+        @Suppress("DEPRECATION")
+        fun v3TypeFor(category: WatchNotificationCategory): Int = when (category) {
+            WatchNotificationCategory.SMS -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_SMS
+            WatchNotificationCategory.EMAIL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_EMAIL
+            WatchNotificationCategory.CALL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_CALL
+            WatchNotificationCategory.MISSED_CALL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_MISSED_CALL
+            WatchNotificationCategory.GENERIC -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_GENERAL
+        }
 
         /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
         fun Int.nonZero(): Int? = if (this != 0) this else null

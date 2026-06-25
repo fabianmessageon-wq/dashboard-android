@@ -84,6 +84,19 @@
                 android:resource="@xml/capture_widget_info" />
         </receiver>
 
+        <!-- Mirrors incoming calls/texts to the watch (W7). Bound by the system once the user grants
+             notification access; the BIND_NOTIFICATION_LISTENER_SERVICE permission restricts binding
+             to the system, so exported is false. -->
+        <service
+            android:name=".notify.WatchNotificationListenerService"
+            android:exported="false"
+            android:label="@string/watch_notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>
