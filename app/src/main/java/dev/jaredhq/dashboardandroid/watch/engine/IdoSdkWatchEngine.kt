@@ -29,6 +29,7 @@ import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
@@ -57,6 +58,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         MutableStateFlow(WatchEngineConnectionState.DISCONNECTED)
     override val connectionState: StateFlow<WatchEngineConnectionState> =
         _connectionState.asStateFlow()
+
+    // Buffered so an emit from the SDK callback thread never suspends/drops (no active collector yet
+    // is fine — the connection service subscribes while running).
+    private val _controlEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<WatchControlEvent>(extraBufferCapacity = 8)
+    override val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent> =
+        _controlEvents.asSharedFlow()
 
     @Volatile
     private var initialized = false
@@ -98,6 +106,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     @Volatile
     private var functionTableCached = false
 
+    // Retained so notification sends (W7) can branch on the device's message capability
+    // (ex_table_main10_v3_notify_msg) the same way the stock VeryFit app does.
+    @Volatile
+    private var cachedFunctionInfo: SupportFunctionInfo? = null
+
     @Volatile
     private var pendingSyncAfterFunctionTable = false
 
@@ -113,6 +126,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     override fun disconnect() {
         functionTableCached = false
+        cachedFunctionInfo = null
         pendingSyncAfterFunctionTable = false
         _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
@@ -135,6 +149,50 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return
         }
         startSync()
+    }
+
+    override fun sendNotification(notification: WatchNotification): Boolean {
+        if (!isConnected()) {
+            Log.w(TAG, "sendNotification ignored — not connected")
+            return false
+        }
+        return try {
+            // Mirror VeryFit's capability gate (MsgNotificationHelper.sendNotificationDevice): devices
+            // flagged ex_table_main10_v3_notify_msg take the V3 message-notice path; the rest take the
+            // newer NewMessageInfo path. Each enumeration has its own per-category type codes (see
+            // [v3TypeFor]/[newTypeFor]), so an SMS/call renders as such on the watch. The function
+            // table is fetched once per connected session (see [syncHealth]); if it hasn't arrived yet
+            // we fall back to the newer path (the common case).
+            val useOldV3 = cachedFunctionInfo?.ex_table_main10_v3_notify_msg == true
+            if (useOldV3) {
+                @Suppress("DEPRECATION")
+                val notice = com.ido.ble.protocol.model.V3MessageNotice().apply {
+                    evtType = v3TypeFor(notification.category)
+                    contact = notification.appName
+                    dataText = notification.body
+                    // For an incoming call, offer answer/reject/mute on the watch face; the taps come
+                    // back via [deviceControlCallBack]. Other categories carry no controls.
+                    val isCall = notification.category == WatchNotificationCategory.CALL
+                    supportAnswering = isCall
+                    supportHangUp = isCall
+                    supportMute = isCall
+                }
+                Log.i(TAG, "sendNotification (V3 notice) $notice")
+                BLEManager.setV3MessageNotice(notice)
+            } else {
+                val info = com.ido.ble.protocol.model.NewMessageInfo().apply {
+                    type = newTypeFor(notification.category)
+                    name = notification.appName
+                    content = notification.body
+                }
+                Log.i(TAG, "sendNotification (new message) $info")
+                BLEManager.setNewMessageDetailInfo(info)
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "sendNotification failed", t)
+            false
+        }
     }
 
     private fun startSync() {
@@ -168,6 +226,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerConnectCallBack(connectCallBack)
         cm.registerBindCallBack(bindCallBack)
         cm.registerGetDeviceInfoCallBack(deviceInfoCallBack)
+        cm.registerDeviceControlAppCallBack(deviceControlCallBack)
         // NOTE: no registerSyncActivity/HealthCallBack here. The orchestrated syncAllData() path
         // delivers every record through the SyncPara.ISyncDataListener (syncDataListener) below;
         // registering the CallBackManager SyncCallBacks too would double-deliver each record.
@@ -238,6 +297,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onConnectBreak(mac: String?) {
             Log.w(TAG, "onConnectBreak $mac")
             functionTableCached = false
+            cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
@@ -272,11 +332,42 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
     }
 
+    // ── Device → app control (W7 call control) ────────────────────────────────────────
+    // The watch sends these when the user taps answer/reject/mute on an incoming-call notification
+    // we pushed with the support* flags set. We translate to domain [WatchControlEvent]s; the app's
+    // connection service performs the actual telephony action. Non-call controls (media/camera/volume)
+    // are ignored for now.
+    private val deviceControlCallBack = object : com.ido.ble.callback.DeviceControlAppCallBack.ICallBack {
+        override fun onControlEvent(
+            type: com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType?,
+            value: Int,
+        ) {
+            val event = when (type) {
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.ANSWER_PHONE ->
+                    WatchControlEvent.ANSWER_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.REJECT_PHONE ->
+                    WatchControlEvent.REJECT_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.MUTE_PHONE ->
+                    WatchControlEvent.MUTE_CALL
+                else -> null
+            }
+            if (event != null) {
+                Log.i(TAG, "device control: $type → $event")
+                _controlEvents.tryEmit(event)
+            }
+        }
+
+        override fun onAntiLostNotice(on: Boolean, time: Long) {}
+        override fun onFindPhone(on: Boolean, time: Long) {}
+        override fun onOneKeySOS(on: Boolean, time: Long) {}
+    }
+
     // ── Device info: function table gate ──────────────────────────────────────────────
     // Extends BaseGetDeviceInfoCallBack (no-op defaults) so we only handle onGetFunctionTable.
     private val deviceInfoCallBack = object : BaseGetDeviceInfoCallBack() {
         override fun onGetFunctionTable(info: SupportFunctionInfo?) {
             functionTableCached = info != null
+            cachedFunctionInfo = info
             Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
             if (pendingSyncAfterFunctionTable) {
                 pendingSyncAfterFunctionTable = false
@@ -447,6 +538,48 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             }
         }
 
+        // V3 blood pressure → one WatchBloodPressureReading per sample. Each item carries
+        // sys_blood/dias_blood (mmHg) and an `offset` minute within the parent day; resolved like the
+        // other point metrics as (day start_time + offset) minutes from midnight (the offset-unit
+        // caveat applies; the date prefix is always exact). Skip sentinel/zero rows.
+        override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {
+            if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            data.items.forEach { item ->
+                if (item.sys_blood <= 0 || item.dias_blood <= 0) return@forEach
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onBloodPressureReading(
+                        WatchBloodPressureReading(
+                            recordedAt = ts,
+                            systolic = item.sys_blood,
+                            diastolic = item.dias_blood,
+                        )
+                    )
+                }
+            }
+        }
+
+        // IDO "pressure" is the mental-stress metric (0–100); each item is one sample with a value and
+        // an `offset` minute from the day's startTime. Emit one WatchStressReading per item.
+        // (HealthV3EmotionHealth is a *categorical* mood code — PLEASANT/CALM/UNPLEASANT — not a 0–100
+        // score, so it is intentionally NOT mapped here; it stays logged-only.)
+        override fun onGetHealthPressureData(
+            data: com.ido.ble.data.manage.database.HealthPressure?,
+            items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?,
+            isLast: Boolean,
+        ) {
+            if (data == null || data.year == 0 || items.isNullOrEmpty()) return
+            items.forEach { item ->
+                if (item.value <= 0) return@forEach
+                runCatching {
+                    localDateTime(data.year, data.month, data.day, (data.startTime + item.offset) * 60)
+                }.onSuccess { ts ->
+                    listener?.onStressReading(WatchStressReading(recordedAt = ts, stressScore = item.value))
+                }
+            }
+        }
+
         // V3 daily activity rollup → WatchActivityDay. This V3-only watch never fires the v2
         // onGetActivityData, so HealthSportV3's day totals are THE source of daily steps/distance/
         // calories. We map the day totals (the per-minute `items` buckets are ignored) and reuse the
@@ -457,16 +590,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onActivityDay(data.toActivityDay())
         }
 
-        // ── Still logged-only (need domain models / dashboard columns): GPS, drink plan, BP V3,
-        // body composition, noise, pressure, swimming, ECG, emotion-health. ──
+        // ── Still logged-only — no domain model / dashboard column yet, or no clean mapping:
+        //   GPS, drink plan, body composition (needs a paired bio-impedance scale + int→real value
+        //   scale to confirm — won't fire on a wrist watch), noise, swimming, ECG, second-by-second
+        //   HR, and emotion-health (a categorical mood code, not a 0–100 score). ──
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
-        override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {}
         override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {}
         override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {}
         override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {}
         override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {}
-        override fun onGetHealthPressureData(data: com.ido.ble.data.manage.database.HealthPressure?, items: MutableList<com.ido.ble.data.manage.database.HealthPressureItem>?, isLast: Boolean) {}
         override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {}
         override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {}
         override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {}
@@ -590,6 +723,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onRespiratoryReading(reading: WatchRespiratoryReading) { Log.i(TAG, "RESP $reading") }
         override fun onTemperatureReading(reading: WatchTemperatureReading) { Log.i(TAG, "TEMP $reading") }
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { Log.i(TAG, "BODY_ENERGY $reading") }
+        override fun onBloodPressureReading(reading: WatchBloodPressureReading) { Log.i(TAG, "BLOOD_PRESSURE $reading") }
+        override fun onStressReading(reading: WatchStressReading) { Log.i(TAG, "STRESS $reading") }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }
@@ -597,6 +732,27 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
+
+        /** Category → NewMessageInfo type (modern path). No incoming-call type exists here, so a live
+         *  CALL falls back to GENERIC and relies on the body text ("Incoming call · …"). */
+        fun newTypeFor(category: WatchNotificationCategory): Int = when (category) {
+            WatchNotificationCategory.SMS -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_SMS
+            WatchNotificationCategory.EMAIL -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_EMAIL
+            WatchNotificationCategory.MISSED_CALL -> com.ido.ble.protocol.model.NewMessageInfo.TYPE_MISSED_CALL
+            WatchNotificationCategory.CALL, WatchNotificationCategory.GENERIC ->
+                com.ido.ble.protocol.model.NewMessageInfo.TYPE_GENERAL
+        }
+
+        /** Category → V3MessageNotice type (legacy V3 path) — this enumeration *does* have a live
+         *  TYPE_CALL, so an incoming call renders as a call there. */
+        @Suppress("DEPRECATION")
+        fun v3TypeFor(category: WatchNotificationCategory): Int = when (category) {
+            WatchNotificationCategory.SMS -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_SMS
+            WatchNotificationCategory.EMAIL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_EMAIL
+            WatchNotificationCategory.CALL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_CALL
+            WatchNotificationCategory.MISSED_CALL -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_MISSED_CALL
+            WatchNotificationCategory.GENERIC -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_GENERAL
+        }
 
         /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
         fun Int.nonZero(): Int? = if (this != 0) this else null

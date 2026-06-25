@@ -16,12 +16,22 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.jaredhq.dashboardandroid.notify.NotificationAccess
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 
 /**
@@ -105,6 +115,8 @@ fun SettingsScreen(
             }
         }
 
+        WatchNotificationMirrorCard()
+
         Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Getting a device token", style = MaterialTheme.typography.titleMedium)
@@ -117,6 +129,42 @@ fun SettingsScreen(
                         "Clear token here.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Self-contained control for the W7 calls/texts → watch mirror. Notification access can't be
+ * requested programmatically, so this shows the current grant state and deep-links to the system
+ * screen; it re-checks on resume so returning from Settings reflects the new state immediately.
+ */
+@Composable
+private fun WatchNotificationMirrorCard() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var granted by remember { mutableStateOf(NotificationAccess.isGranted(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) granted = NotificationAccess.isGranted(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Mirror calls & texts to watch", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = if (granted) {
+                    "On. Incoming calls and texts show on the watch while it's connected."
+                } else {
+                    "Off. Grant notification access so calls and texts can be forwarded to the watch."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(onClick = { context.startActivity(NotificationAccess.settingsIntent()) }) {
+                Text(if (granted) "Notification access settings" else "Grant notification access")
             }
         }
     }

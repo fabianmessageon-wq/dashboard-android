@@ -6,8 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
  * Coarse connection lifecycle of a [WatchEngine], surfaced to the UI via
  * [WatchEngine.connectionState].
  *
- * Deliberately minimal and engine-agnostic: it carries no transport detail (the clean-room
- * `ble.WatchConnectionState` keeps GATT/MTU/raw-packet fields for the debug console). The product
+ * Deliberately minimal and engine-agnostic: it carries no transport detail. The product
  * Watch screen renders connection + sync progress from these states; any richer per-engine detail
  * stays behind the boundary. [isConnected] is true for [CONNECTED] and [SYNCING] (and transiently
  * for [BINDING]); this flow adds the finer steps the UI needs.
@@ -39,20 +38,25 @@ enum class WatchEngineConnectionState {
  * The watch integration boundary (ADR 0001).
  *
  * Everything above this interface speaks only the app's own domain types
- * ([WatchActivityDay], [WatchHeartRateDay], [WatchSleepSession], …). Two implementations
- * exist:
+ * ([WatchActivityDay], [WatchHeartRateDay], [WatchSleepSession], …). The active implementation
+ * is [IdoSdkWatchEngine], which wraps the vendored IDO/VeryFit SDK — the ONLY place
+ * `com.ido.*` / `com.veryfit.*` may be imported.
  *
- *  - [IdoSdkWatchEngine] — wraps the vendored IDO/VeryFit SDK (the active engine for the
- *    private build). The ONLY place `com.ido.*` / `com.veryfit.*` may be imported.
- *  - a future `CleanRoomWatchEngine` — the existing direct-BLE clean-room code
- *    (`WatchBleManager`/`WatchProtocol`), retained as the long-term independent path.
- *
- * Keeping the SDK behind this seam makes "clean-room later" a swap, not a rewrite.
+ * Keeping the SDK behind this seam means another engine (e.g. a future clean-room one) can be
+ * swapped in without touching callers.
  */
 interface WatchEngine {
 
     /** Listener for decoded health data + sync lifecycle. Set before calling [syncHealth]. */
     var listener: WatchHealthListener?
+
+    /**
+     * Control events the **watch** initiates for the phone to act on (W7) — e.g. answering or
+     * rejecting an incoming call from the wrist. Hot stream; an app component (the connection
+     * service) collects it and performs the telephony action. Empty/never-emitting for engines
+     * without device-control support.
+     */
+    val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent>
 
     /**
      * Current connection lifecycle, for the UI to observe. Starts at
@@ -81,4 +85,43 @@ interface WatchEngine {
      * immediately. No-op (or [WatchHealthListener.onSyncFailed]) if not connected.
      */
     fun syncHealth()
+
+    /**
+     * Push a single [notification] to the watch face (W7) — e.g. a dashboard reminder or quote.
+     * Fire-and-forget; the watch shows it if the message feature is enabled there. Returns whether
+     * the message was dispatched to the SDK (false if not connected or the engine has no notification
+     * support). Default: a no-op returning false, so non-SDK engines compile unchanged.
+     */
+    fun sendNotification(notification: WatchNotification): Boolean = false
+}
+
+/**
+ * A message to surface on the watch face (W7). [appName] is shown as the source/sender label and
+ * [body] as the message text. [category] lets the engine pick the right on-watch message type (so an
+ * SMS or a call render as such, not a generic alert). Engine-agnostic and free of any `com.ido.*`
+ * reference; the engine maps it onto whatever message API the connected watch supports.
+ */
+data class WatchNotification(
+    val appName: String,
+    val body: String,
+    val category: WatchNotificationCategory = WatchNotificationCategory.GENERIC,
+)
+
+/**
+ * Kind of message being mirrored, so the engine can choose the matching on-watch type. Display-only:
+ * an incoming [CALL] shows on the watch but answer/reject-from-watch (call control) is a later step.
+ */
+enum class WatchNotificationCategory {
+    GENERIC,
+    SMS,
+    EMAIL,
+    CALL,
+    MISSED_CALL,
+}
+
+/** A control action the watch asks the phone to perform (W7 call control). */
+enum class WatchControlEvent {
+    ANSWER_CALL,
+    REJECT_CALL,
+    MUTE_CALL,
 }

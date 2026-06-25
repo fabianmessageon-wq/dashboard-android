@@ -35,6 +35,8 @@ class UploadingWatchHealthListener(
     private val respiratoryReadings = mutableListOf<WatchRespiratoryReading>()
     private val temperatureReadings = mutableListOf<WatchTemperatureReading>()
     private val bodyEnergyReadings = mutableListOf<WatchBodyEnergyReading>()
+    private val bloodPressureReadings = mutableListOf<WatchBloodPressureReading>()
+    private val stressReadings = mutableListOf<WatchStressReading>()
 
     override fun onActivityDay(day: WatchActivityDay) {
         Log.i(TAG, "ACTIVITY $day")
@@ -81,6 +83,16 @@ class UploadingWatchHealthListener(
         synchronized(lock) { bodyEnergyReadings += reading }
     }
 
+    override fun onBloodPressureReading(reading: WatchBloodPressureReading) {
+        Log.i(TAG, "BLOOD_PRESSURE $reading")
+        synchronized(lock) { bloodPressureReadings += reading }
+    }
+
+    override fun onStressReading(reading: WatchStressReading) {
+        Log.i(TAG, "STRESS $reading")
+        synchronized(lock) { stressReadings += reading }
+    }
+
     override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
 
     override fun onSyncComplete() {
@@ -101,7 +113,8 @@ class UploadingWatchHealthListener(
                 sleepSessions.isEmpty() && workouts.isEmpty() &&
                 spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
                 respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
-                bodyEnergyReadings.isEmpty()
+                bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
+                stressReadings.isEmpty()
             ) {
                 return
             }
@@ -116,6 +129,8 @@ class UploadingWatchHealthListener(
                 respiratoryReadings = respiratoryReadings.toList(),
                 temperatureReadings = temperatureReadings.toList(),
                 bodyEnergyReadings = bodyEnergyReadings.toList(),
+                bloodPressureReadings = bloodPressureReadings.toList(),
+                stressReadings = stressReadings.toList(),
             ).also {
                 activityDays.clear()
                 heartRateDays.clear()
@@ -126,6 +141,8 @@ class UploadingWatchHealthListener(
                 respiratoryReadings.clear()
                 temperatureReadings.clear()
                 bodyEnergyReadings.clear()
+                bloodPressureReadings.clear()
+                stressReadings.clear()
             }
         }
 

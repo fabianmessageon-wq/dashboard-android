@@ -47,8 +47,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState.SYNC
 
 /**
  * The product Watch screen — connection + health sync, driven by the [WatchEngine] boundary
- * (the vendored-SDK engine today). Distinct from the clean-room BLE debug console
- * ([WatchScreen]/[WatchViewModel]), which is retained as a dev-only tool.
+ * (the vendored-SDK engine today).
  *
  * Requests Bluetooth permissions on first show, then surfaces the connection lifecycle and lets
  * the user connect/disconnect and trigger a sync; a synced run's record counts confirm data flowed.
@@ -59,6 +58,8 @@ fun WatchHealthScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSync: () -> Unit,
+    onSendTestNotification: () -> Unit,
+    onNotificationHintShown: () -> Unit,
     onPermissionsGranted: () -> Unit,
     onPermissionsDenied: () -> Unit,
 ) {
@@ -86,7 +87,7 @@ fun WatchHealthScreen(
         if (allGranted) onPermissionsGranted() else permissionLauncher.launch(permissions)
     }
 
-    WatchHealthContent(state, onConnect, onDisconnect, onSync)
+    WatchHealthContent(state, onConnect, onDisconnect, onSync, onSendTestNotification, onNotificationHintShown)
 }
 
 @Composable
@@ -95,6 +96,8 @@ private fun WatchHealthContent(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSync: () -> Unit,
+    onSendTestNotification: () -> Unit = {},
+    onNotificationHintShown: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -118,6 +121,24 @@ private fun WatchHealthContent(
         }
 
         ActionButtons(state, onConnect, onDisconnect, onSync)
+
+        // W7: once connected, allow pushing a sample notification to the watch face to verify the
+        // message path on-device. Hidden while syncing (the single GATT link is busy).
+        if (state.connection == CONNECTED) {
+            OutlinedButton(
+                onClick = onSendTestNotification,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Send test notification") }
+        }
+
+        state.notificationHint?.let { hint ->
+            // Auto-dismiss the transient feedback so it doesn't linger.
+            LaunchedEffect(hint) {
+                kotlinx.coroutines.delay(3_000)
+                onNotificationHintShown()
+            }
+            BannerCard(hint, error = false)
+        }
 
         if (state.syncing) {
             SyncProgressCard(state)
@@ -290,6 +311,7 @@ private fun PreviewDisconnected() {
         WatchHealthContent(
             state = WatchHealthUiState(hasPermissions = true),
             onConnect = {}, onDisconnect = {}, onSync = {},
+            onSendTestNotification = {}, onNotificationHintShown = {},
         )
     }
 }
@@ -312,6 +334,7 @@ private fun PreviewSynced() {
                 ),
             ),
             onConnect = {}, onDisconnect = {}, onSync = {},
+            onSendTestNotification = {}, onNotificationHintShown = {},
         )
     }
 }

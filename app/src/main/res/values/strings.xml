@@ -8,4 +8,11 @@
     <string name="channel_reminders_desc">Deadlines, events, and tasks due from your dashboard.</string>
     <string name="channel_quote_name">Daily quote</string>
     <string name="channel_quote_desc">A daily line from your notes, on the lock screen.</string>
+
+    <!-- NotificationListenerService that mirrors calls/SMS to the watch (W7). -->
+    <string name="watch_notification_listener_label">Mirror calls &amp; texts to watch</string>
+
+    <!-- Ongoing notification for the always-on watch-connection service (W7). -->
+    <string name="channel_watch_link_name">Watch connection</string>
+    <string name="channel_watch_link_desc">Keeps your watch linked so calls and texts can be mirrored.</string>
 </resources>

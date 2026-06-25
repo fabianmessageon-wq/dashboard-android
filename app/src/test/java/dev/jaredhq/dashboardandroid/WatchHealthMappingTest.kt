@@ -1,11 +1,13 @@
 package dev.jaredhq.dashboardandroid
 
 import dev.jaredhq.dashboardandroid.data.api.dto.toDto
+import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -39,6 +41,10 @@ class WatchHealthMappingTest {
                 WatchTemperatureReading("2026-06-24 09:45:00", celsius = 36.5),
             ),
             bodyEnergyReadings = listOf(WatchBodyEnergyReading("2026-06-24 12:00:00", energy = 73)),
+            bloodPressureReadings = listOf(
+                WatchBloodPressureReading("2026-06-24 07:10:00", systolic = 118, diastolic = 76),
+            ),
+            stressReadings = listOf(WatchStressReading("2026-06-24 14:20:00", stressScore = 38)),
         )
 
         val dto = batch.toDto()
@@ -64,6 +70,16 @@ class WatchHealthMappingTest {
         val energy = dto.bodyEnergyReadings.single()
         assertEquals(expectedEpoch("2026-06-24 12:00:00"), energy.recordedAt)
         assertEquals(73, energy.energy)
+
+        val bp = dto.bloodPressureReadings.single()
+        assertEquals("2026-06-24", bp.date)
+        assertEquals(expectedEpoch("2026-06-24 07:10:00"), bp.recordedAt)
+        assertEquals(118, bp.systolic)
+        assertEquals(76, bp.diastolic)
+
+        val stress = dto.stressReadings.single()
+        assertEquals(expectedEpoch("2026-06-24 14:20:00"), stress.recordedAt)
+        assertEquals(38, stress.stressScore)
     }
 
     @Test
@@ -72,7 +88,11 @@ class WatchHealthMappingTest {
             deviceId = "f4:91:29:51:c6:45",
             spo2Readings = listOf(WatchSpo2Reading("2026-06-24 08:30:00", percent = 97)),
             bodyEnergyReadings = listOf(WatchBodyEnergyReading("2026-06-24 12:00:00", energy = 73)),
+            bloodPressureReadings = listOf(
+                WatchBloodPressureReading("2026-06-24 07:10:00", systolic = 118, diastolic = 76),
+            ),
+            stressReadings = listOf(WatchStressReading("2026-06-24 14:20:00", stressScore = 38)),
         )
-        assertEquals(2, batch.recordCount)
+        assertEquals(4, batch.recordCount)
     }
 }

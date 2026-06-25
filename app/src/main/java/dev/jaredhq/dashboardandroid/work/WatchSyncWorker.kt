@@ -4,7 +4,11 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
+import dev.jaredhq.dashboardandroid.domain.model.NotificationKind
+import dev.jaredhq.dashboardandroid.notify.NotificationState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchNotification
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withTimeoutOrNull
@@ -13,7 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Background health sync: connects to the watch via the [WatchEngine] boundary and lets a full
  * sync run, so health data trickles up even if the user never opens the Watch tab.
  *
- * This replaces the old Phase-2 telemetry upload (battery/MTU via `WatchBleManager`). The engine's
+ * This replaces the old Phase-2 connection-telemetry upload. The engine's
  * connect path auto-runs the sync after (re)bind, and the engine's own upload listener
  * (`UploadingWatchHealthListener`) pushes the decoded records to the dashboard and owns upload
  * retry — so this worker only has to drive the connection and wait for the run to finish.
@@ -57,9 +61,50 @@ class WatchSyncWorker(
                 }
         }
 
+        // While the link is still up after the sync, opportunistically push pending dashboard content
+        // to the watch face (W7 notification bridge). This reuses the connection window we already
+        // have — the app connects on-demand, so a sync is the reliable moment the watch is reachable.
+        if (engine.isConnected()) {
+            runCatching { pushPendingToWatch(engine) }
+        }
+
         // Release the link so it can't linger and contend with the UI on the next foreground use.
         engine.disconnect()
         return Result.success()
+    }
+
+    /**
+     * Best-effort: push the daily quote and the soonest actionable reminders to the connected watch.
+     * Each is deduped per (server-computed) date via [NotificationState] using watch-specific flags
+     * (independent of the native notification channel), and only marked "pushed" once the engine
+     * actually dispatched it — so a failed send retries on the next sync. Reminders mirror the native
+     * bridge's policy (EVENT/DEADLINE only) and are capped per run so the watch never gets a buzz
+     * storm; if a send fails (the link dropped) the loop stops early.
+     */
+    private suspend fun pushPendingToWatch(engine: WatchEngine) {
+        val state = NotificationState(applicationContext)
+
+        ServiceLocator.repository.getQuote().onSuccess { quote ->
+            if (state.quoteAlreadyPushedToWatch(quote.date)) return@onSuccess
+            if (engine.sendNotification(WatchNotification(appName = "Daily quote", body = quote.text))) {
+                state.markQuotePushedToWatch(quote.date)
+            }
+        }
+
+        ServiceLocator.repository.getNotifications().onSuccess { feed ->
+            var pushed = 0
+            for (item in feed.items) {
+                if (pushed >= MAX_WATCH_REMINDERS) break
+                if (item.kind != NotificationKind.EVENT && item.kind != NotificationKind.DEADLINE) continue
+                if (state.reminderAlreadyPushedToWatch(feed.date, item.id)) continue
+                val body = item.timeLabel?.let { "$it · ${item.title}" } ?: item.title
+                if (!engine.sendNotification(WatchNotification(appName = "Reminder", body = body))) {
+                    break // engine stopped accepting (link likely dropped) — stop the run
+                }
+                state.markReminderPushedToWatch(feed.date, item.id)
+                pushed++
+            }
+        }
     }
 
     companion object {
@@ -67,5 +112,8 @@ class WatchSyncWorker(
 
         /** Budget for connect + (re)bind + a full sync run; well under WorkManager's 10-min cap. */
         private const val SYNC_TIMEOUT_MS = 6 * 60 * 1000L
+
+        /** Cap reminders pushed to the watch per sync so it never gets a buzz storm. */
+        private const val MAX_WATCH_REMINDERS = 3
     }
 }

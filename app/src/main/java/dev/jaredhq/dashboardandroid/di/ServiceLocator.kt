@@ -12,7 +12,6 @@ import dev.jaredhq.dashboardandroid.data.cache.room.RoomTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
-import dev.jaredhq.dashboardandroid.ble.WatchBleManager
 import dev.jaredhq.dashboardandroid.watch.engine.CompositeWatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.IdoSdkWatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.UploadingWatchHealthListener
@@ -63,12 +62,9 @@ object ServiceLocator {
     lateinit var repository: DashboardRepository
         private set
 
-    lateinit var watchBleManager: WatchBleManager
-        private set
-
     /**
      * The active watch data engine (ADR 0001). Currently the vendored-SDK engine
-     * ([IdoSdkWatchEngine]); a clean-room engine can be swapped in here behind the same
+     * ([IdoSdkWatchEngine]); another implementation can be swapped in here behind the same
      * [WatchEngine] interface without touching callers.
      */
     lateinit var watchEngine: WatchEngine
@@ -96,12 +92,6 @@ object ServiceLocator {
                 cache = cache,
                 apiProvider = { makeClient() },
             )
-
-            // Retained clean-room BLE stack (debug console / future CleanRoomWatchEngine). No longer
-            // wired to trigger the sync worker: the worker now drives a *health* sync via the
-            // WatchEngine, and letting this second stack kick that off would put both BLE stacks on
-            // the same watch at once (the documented contention). The product UI drives the engine.
-            watchBleManager = WatchBleManager(appContext)
 
             // Vendored-SDK engine (ADR 0001). init() is idempotent; it loads the native lib
             // + opens the SDK's own DB once at startup. Guarded so a native-load/SDK-init

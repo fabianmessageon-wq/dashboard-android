@@ -9,6 +9,17 @@
          if the user declines. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Always-on watch link (W7 WatchConnectionService) so incoming calls/texts mirror in real
+         time. connectedDevice type is authorised by BLUETOOTH_CONNECT (declared below). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Answer / reject an incoming call from the watch (W7 call control). Requested at runtime when
+         the user has enabled call/text mirroring; if denied, calls mirror display-only. -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <!-- Re-arm the always-on watch link after a reboot/update (W7 BootReceiver), so calls/texts keep
+         mirroring without the user reopening the app. The receiver self-gates via syncRunState. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- BLE permissions — Android 12+ (API 31) uses BLUETOOTH_SCAN / BLUETOOTH_CONNECT.
          Runtime-requested on the Watch tab; BLUETOOTH / BLUETOOTH_ADMIN are for API < 31. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
@@ -82,6 +93,38 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/capture_widget_info" />
+        </receiver>
+
+        <!-- Mirrors incoming calls/texts to the watch (W7). Bound by the system once the user grants
+             notification access; the BIND_NOTIFICATION_LISTENER_SERVICE permission restricts binding
+             to the system, so exported is false. -->
+        <service
+            android:name=".notify.WatchNotificationListenerService"
+            android:exported="false"
+            android:label="@string/watch_notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Always-on watch link so calls/texts mirror in real time (W7). Started from the
+             foreground Activity; gated on the notification-access opt-in. -->
+        <service
+            android:name=".work.WatchConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Re-arms WatchConnectionService after a reboot or app update (W7), so the always-on link
+             returns without the user reopening the app. exported=true because the sender is the
+             system; both actions are protected broadcasts. Self-gates via syncRunState. -->
+        <receiver
+            android:name=".work.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
 
     </application>
