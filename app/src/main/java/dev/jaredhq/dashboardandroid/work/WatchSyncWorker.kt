@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
+import dev.jaredhq.dashboardandroid.notify.NotificationState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchNotification
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withTimeoutOrNull
@@ -57,9 +60,33 @@ class WatchSyncWorker(
                 }
         }
 
+        // While the link is still up after the sync, opportunistically push the daily quote to the
+        // watch face (W7 notification bridge). This reuses the connection window we already have —
+        // the app connects on-demand, so a sync is the reliable moment the watch is reachable.
+        if (engine.isConnected()) {
+            runCatching { pushDailyQuoteToWatch(engine) }
+        }
+
         // Release the link so it can't linger and contend with the UI on the next foreground use.
         engine.disconnect()
         return Result.success()
+    }
+
+    /**
+     * Best-effort: fetch the daily quote and push it to the connected watch, at most once per
+     * (server-computed) date. Independent of the native quote notification ([NotificationState]
+     * tracks a separate watch flag), and only marks "pushed" once the engine actually dispatched it,
+     * so a failed send retries on the next sync.
+     */
+    private suspend fun pushDailyQuoteToWatch(engine: WatchEngine) {
+        val state = NotificationState(applicationContext)
+        ServiceLocator.repository.getQuote().onSuccess { quote ->
+            if (state.quoteAlreadyPushedToWatch(quote.date)) return@onSuccess
+            val dispatched = engine.sendNotification(
+                WatchNotification(appName = "Daily quote", body = quote.text),
+            )
+            if (dispatched) state.markQuotePushedToWatch(quote.date)
+        }
     }
 
     companion object {
