@@ -234,6 +234,8 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onConnect = vm::connect,
                     onDisconnect = vm::disconnect,
                     onSync = vm::syncNow,
+                    onSendTestNotification = vm::sendTestNotification,
+                    onNotificationHintShown = vm::clearNotificationHint,
                     onPermissionsGranted = vm::onPermissionsGranted,
                     onPermissionsDenied = vm::onPermissionsDenied,
                 )

@@ -98,6 +98,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     @Volatile
     private var functionTableCached = false
 
+    // Retained so notification sends (W7) can branch on the device's message capability
+    // (ex_table_main10_v3_notify_msg) the same way the stock VeryFit app does.
+    @Volatile
+    private var cachedFunctionInfo: SupportFunctionInfo? = null
+
     @Volatile
     private var pendingSyncAfterFunctionTable = false
 
@@ -113,6 +118,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     override fun disconnect() {
         functionTableCached = false
+        cachedFunctionInfo = null
         pendingSyncAfterFunctionTable = false
         _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
@@ -135,6 +141,43 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return
         }
         startSync()
+    }
+
+    override fun sendNotification(notification: WatchNotification): Boolean {
+        if (!isConnected()) {
+            Log.w(TAG, "sendNotification ignored — not connected")
+            return false
+        }
+        return try {
+            // Mirror VeryFit's capability gate (MsgNotificationHelper.sendNotificationDevice): devices
+            // flagged ex_table_main10_v3_notify_msg take the V3 message-notice path; the rest take the
+            // newer NewMessageInfo path. Each enumeration has its own GENERAL category code. The
+            // function table is fetched once per connected session (see [syncHealth]); if it hasn't
+            // arrived yet we fall back to the newer path (the common case).
+            val useOldV3 = cachedFunctionInfo?.ex_table_main10_v3_notify_msg == true
+            if (useOldV3) {
+                @Suppress("DEPRECATION")
+                val notice = com.ido.ble.protocol.model.V3MessageNotice().apply {
+                    evtType = com.ido.ble.protocol.model.V3MessageNotice.TYPE_GENERAL
+                    contact = notification.appName
+                    dataText = notification.body
+                }
+                Log.i(TAG, "sendNotification (V3 notice) $notice")
+                BLEManager.setV3MessageNotice(notice)
+            } else {
+                val info = com.ido.ble.protocol.model.NewMessageInfo().apply {
+                    type = com.ido.ble.protocol.model.NewMessageInfo.TYPE_GENERAL
+                    name = notification.appName
+                    content = notification.body
+                }
+                Log.i(TAG, "sendNotification (new message) $info")
+                BLEManager.setNewMessageDetailInfo(info)
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "sendNotification failed", t)
+            false
+        }
     }
 
     private fun startSync() {
@@ -238,6 +281,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onConnectBreak(mac: String?) {
             Log.w(TAG, "onConnectBreak $mac")
             functionTableCached = false
+            cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
@@ -277,6 +321,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private val deviceInfoCallBack = object : BaseGetDeviceInfoCallBack() {
         override fun onGetFunctionTable(info: SupportFunctionInfo?) {
             functionTableCached = info != null
+            cachedFunctionInfo = info
             Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
             if (pendingSyncAfterFunctionTable) {
                 pendingSyncAfterFunctionTable = false

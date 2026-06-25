@@ -81,4 +81,22 @@ interface WatchEngine {
      * immediately. No-op (or [WatchHealthListener.onSyncFailed]) if not connected.
      */
     fun syncHealth()
+
+    /**
+     * Push a single [notification] to the watch face (W7) — e.g. a dashboard reminder or quote.
+     * Fire-and-forget; the watch shows it if the message feature is enabled there. Returns whether
+     * the message was dispatched to the SDK (false if not connected or the engine has no notification
+     * support). Default: a no-op returning false, so non-SDK engines compile unchanged.
+     */
+    fun sendNotification(notification: WatchNotification): Boolean = false
 }
+
+/**
+ * A message to surface on the watch face (W7). [appName] is shown as the source/sender label and
+ * [body] as the message text. Engine-agnostic and free of any `com.ido.*` reference; the engine maps
+ * it onto whatever message API the connected watch supports.
+ */
+data class WatchNotification(
+    val appName: String,
+    val body: String,
+)

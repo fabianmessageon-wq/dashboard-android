@@ -9,6 +9,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateDay
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchNotification
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
@@ -55,6 +56,8 @@ data class WatchHealthUiState(
     val liveCounts: WatchSyncCounts = WatchSyncCounts(),
     /** The most recent finished sync, or null if none this session. */
     val lastSync: WatchSyncSummary? = null,
+    /** Transient feedback for the last "send test notification" press (W7), or null. */
+    val notificationHint: String? = null,
 ) {
     val syncing: Boolean get() = connection == WatchEngineConnectionState.SYNCING
 }
@@ -157,6 +160,24 @@ class WatchHealthViewModel(
     /** Trigger a health sync (only meaningful once connected). */
     fun syncNow() {
         engine.syncHealth()
+    }
+
+    /**
+     * Push a sample notification to the watch face (W7) to verify the message path on-device.
+     * Sets a transient [WatchHealthUiState.notificationHint] with the outcome.
+     */
+    fun sendTestNotification() {
+        val dispatched = engine.sendNotification(
+            WatchNotification(appName = "Dashboard", body = "Test notification from your dashboard."),
+        )
+        _state.update {
+            it.copy(notificationHint = if (dispatched) "Notification sent to watch." else "Couldn't send — not connected.")
+        }
+    }
+
+    /** Clear the transient notification feedback once shown. */
+    fun clearNotificationHint() {
+        _state.update { it.copy(notificationHint = null) }
     }
 
     override fun onCleared() {
