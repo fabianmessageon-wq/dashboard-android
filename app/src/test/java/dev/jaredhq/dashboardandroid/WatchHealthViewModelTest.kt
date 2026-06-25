@@ -41,6 +41,8 @@ class WatchHealthViewModelTest {
         override var listener: WatchHealthListener? = null
         val conn = MutableStateFlow(WatchEngineConnectionState.DISCONNECTED)
         override val connectionState: StateFlow<WatchEngineConnectionState> = conn
+        override val controlEvents =
+            kotlinx.coroutines.flow.MutableSharedFlow<dev.jaredhq.dashboardandroid.watch.engine.WatchControlEvent>()
         var connectTarget: String? = null
         var disconnects = 0
         override fun init() {}

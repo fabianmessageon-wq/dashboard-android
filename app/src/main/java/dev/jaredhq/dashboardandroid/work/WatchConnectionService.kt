@@ -1,19 +1,24 @@
 package dev.jaredhq.dashboardandroid.work
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.telecom.TelecomManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import dev.jaredhq.dashboardandroid.R
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
 import dev.jaredhq.dashboardandroid.notify.NotificationAccess
+import dev.jaredhq.dashboardandroid.watch.engine.WatchControlEvent
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +77,9 @@ class WatchConnectionService : Service() {
             }
         }
 
+        // Perform call actions the watch initiates (answer/reject/mute) — W7 call control.
+        scope.launch { engine.controlEvents.collect { handleControl(it) } }
+
         while (coroutineContext.isActive) {
             if (!shouldRun(ctx)) {
                 stopMirroring(engine)
@@ -90,6 +98,53 @@ class WatchConnectionService : Service() {
             engine.connectionState.first { it == WatchEngineConnectionState.DISCONNECTED }
             delay(RECONNECT_BACKOFF_MS)
         }
+    }
+
+    // ── Call control (watch → phone) ──────────────────────────────────────────────────
+
+    private fun handleControl(event: WatchControlEvent) {
+        Log.i(TAG, "control event from watch: $event")
+        when (event) {
+            WatchControlEvent.ANSWER_CALL -> answerCall()
+            WatchControlEvent.REJECT_CALL -> rejectCall()
+            WatchControlEvent.MUTE_CALL -> muteRinger()
+        }
+    }
+
+    private fun hasAnswerPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    // Guarded by hasAnswerPermission(); lint can't see across the helper.
+    @SuppressLint("MissingPermission")
+    private fun answerCall() {
+        if (!hasAnswerPermission()) {
+            Log.w(TAG, "answer ignored — ANSWER_PHONE_CALLS not granted")
+            return
+        }
+        runCatching { getSystemService(TelecomManager::class.java)?.acceptRingingCall() }
+            .onFailure { Log.w(TAG, "answer failed", it) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun rejectCall() {
+        if (!hasAnswerPermission()) {
+            Log.w(TAG, "reject ignored — ANSWER_PHONE_CALLS not granted")
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            Log.w(TAG, "reject needs API 28+ (TelecomManager.endCall)")
+            return
+        }
+        runCatching { getSystemService(TelecomManager::class.java)?.endCall() }
+            .onFailure { Log.w(TAG, "reject failed", it) }
+    }
+
+    private fun muteRinger() {
+        // Best-effort: silenceRinger needs default-dialer/system rights on most devices, so it may
+        // no-op. Answer/reject are the primary controls.
+        runCatching { getSystemService(TelecomManager::class.java)?.silenceRinger() }
+            .onFailure { Log.w(TAG, "mute failed", it) }
     }
 
     /** Run only while mirroring is enabled (notification access) and the app is configured. */

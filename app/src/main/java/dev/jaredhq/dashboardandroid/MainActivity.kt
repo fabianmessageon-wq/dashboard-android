@@ -46,6 +46,7 @@ import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 import dev.jaredhq.dashboardandroid.ui.today.TodayScreen
 import dev.jaredhq.dashboardandroid.ui.today.TodayViewModel
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthScreen
+import dev.jaredhq.dashboardandroid.notify.NotificationAccess
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
 import dev.jaredhq.dashboardandroid.work.WatchConnectionService
 
@@ -74,6 +75,22 @@ class MainActivity : ComponentActivity() {
         // 12+ FGS-start limits. It self-gates on the mirror opt-in + a configured dashboard, so this
         // is a no-op (stop) until the user grants notification access on the Settings → mirror card.
         runCatching { WatchConnectionService.syncRunState(this) }
+        maybeRequestAnswerCallsPermission()
+    }
+
+    /**
+     * Once the user has enabled call/text mirroring (notification access), request ANSWER_PHONE_CALLS
+     * so the watch's answer/reject buttons can act on the call (W7 call control). Best-effort: if
+     * denied, calls still mirror display-only. The system won't re-prompt after a permanent denial.
+     */
+    private fun maybeRequestAnswerCallsPermission() {
+        if (!NotificationAccess.isGranted(this)) return
+        if (checkSelfPermission(android.Manifest.permission.ANSWER_PHONE_CALLS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        requestPermissions(arrayOf(android.Manifest.permission.ANSWER_PHONE_CALLS), RC_ANSWER_CALLS)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -101,6 +118,7 @@ class MainActivity : ComponentActivity() {
         /** Intent extra carrying a tab route ("today" | "capture" | "watch" | "settings"). */
         const val EXTRA_START_ROUTE = "start_route"
         private const val RC_NOTIFICATIONS = 4011
+        private const val RC_ANSWER_CALLS = 4012
     }
 }
 

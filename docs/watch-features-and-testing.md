@@ -90,6 +90,15 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 5. Revoke notification access (or clear the token) → next time the app is foregrounded the service
    self-stops and the ongoing notification disappears.
 
+### 5. Call control — answer / reject from the watch (W7)
+1. With mirroring on, the app requests **ANSWER_PHONE_CALLS** on foreground — grant it (deny → calls
+   still mirror display-only).
+2. Place a call to the phone. On the watch's incoming-call screen, tap **Answer** → the phone should
+   pick up (logcat `WatchConnService control event from watch: ANSWER_CALL`). Tap **Reject** on a
+   later call → it should hang up (API 28+).
+3. Mute is best-effort (`silenceRinger`) and may no-op unless the app is the default dialer — answer
+   and reject are the primary controls.
+
 ### What to capture if something fails
 - `adb logcat` around the action (the tags above).
 - Pull the SDK protocol log: `adb pull /sdcard/Android/data/dev.jaredhq.dashboardandroid/files/ido-logs/`
@@ -98,8 +107,8 @@ manual on-device pass. See [`roadmap.md`](roadmap.md) W6/W7 rows for the design 
 ---
 
 ## Known limitations (by design, for now)
-- **Display-only calls** — no answer/reject *from the watch* yet (needs the SDK's device→app
-  call-control path + an InCallService/`ANSWER_PHONE_CALLS`).
+- **Call control needs `ANSWER_PHONE_CALLS`** — granted at runtime when mirroring is on; if denied,
+  calls mirror display-only. `endCall` (reject) is API 28+; mute is best-effort.
 - **No boot receiver** — the always-on link re-arms when the app is next opened, not automatically
   after a reboot.
 - **Message path is capability-guessed** — if the Active 4 Pro accepts only one of the two message

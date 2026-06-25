@@ -29,6 +29,7 @@ import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
@@ -57,6 +58,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         MutableStateFlow(WatchEngineConnectionState.DISCONNECTED)
     override val connectionState: StateFlow<WatchEngineConnectionState> =
         _connectionState.asStateFlow()
+
+    // Buffered so an emit from the SDK callback thread never suspends/drops (no active collector yet
+    // is fine — the connection service subscribes while running).
+    private val _controlEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<WatchControlEvent>(extraBufferCapacity = 8)
+    override val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent> =
+        _controlEvents.asSharedFlow()
 
     @Volatile
     private var initialized = false
@@ -162,10 +170,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     evtType = v3TypeFor(notification.category)
                     contact = notification.appName
                     dataText = notification.body
-                    // Display-only for now: no answer/reject-from-watch (call control is a later step).
-                    supportAnswering = false
-                    supportHangUp = false
-                    supportMute = false
+                    // For an incoming call, offer answer/reject/mute on the watch face; the taps come
+                    // back via [deviceControlCallBack]. Other categories carry no controls.
+                    val isCall = notification.category == WatchNotificationCategory.CALL
+                    supportAnswering = isCall
+                    supportHangUp = isCall
+                    supportMute = isCall
                 }
                 Log.i(TAG, "sendNotification (V3 notice) $notice")
                 BLEManager.setV3MessageNotice(notice)
@@ -216,6 +226,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerConnectCallBack(connectCallBack)
         cm.registerBindCallBack(bindCallBack)
         cm.registerGetDeviceInfoCallBack(deviceInfoCallBack)
+        cm.registerDeviceControlAppCallBack(deviceControlCallBack)
         // NOTE: no registerSyncActivity/HealthCallBack here. The orchestrated syncAllData() path
         // delivers every record through the SyncPara.ISyncDataListener (syncDataListener) below;
         // registering the CallBackManager SyncCallBacks too would double-deliver each record.
@@ -319,6 +330,36 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
+    }
+
+    // ── Device → app control (W7 call control) ────────────────────────────────────────
+    // The watch sends these when the user taps answer/reject/mute on an incoming-call notification
+    // we pushed with the support* flags set. We translate to domain [WatchControlEvent]s; the app's
+    // connection service performs the actual telephony action. Non-call controls (media/camera/volume)
+    // are ignored for now.
+    private val deviceControlCallBack = object : com.ido.ble.callback.DeviceControlAppCallBack.ICallBack {
+        override fun onControlEvent(
+            type: com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType?,
+            value: Int,
+        ) {
+            val event = when (type) {
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.ANSWER_PHONE ->
+                    WatchControlEvent.ANSWER_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.REJECT_PHONE ->
+                    WatchControlEvent.REJECT_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.MUTE_PHONE ->
+                    WatchControlEvent.MUTE_CALL
+                else -> null
+            }
+            if (event != null) {
+                Log.i(TAG, "device control: $type → $event")
+                _controlEvents.tryEmit(event)
+            }
+        }
+
+        override fun onAntiLostNotice(on: Boolean, time: Long) {}
+        override fun onFindPhone(on: Boolean, time: Long) {}
+        override fun onOneKeySOS(on: Boolean, time: Long) {}
     }
 
     // ── Device info: function table gate ──────────────────────────────────────────────

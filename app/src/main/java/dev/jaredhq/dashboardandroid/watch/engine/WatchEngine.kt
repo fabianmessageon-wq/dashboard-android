@@ -55,6 +55,14 @@ interface WatchEngine {
     var listener: WatchHealthListener?
 
     /**
+     * Control events the **watch** initiates for the phone to act on (W7) — e.g. answering or
+     * rejecting an incoming call from the wrist. Hot stream; an app component (the connection
+     * service) collects it and performs the telephony action. Empty/never-emitting for engines
+     * without device-control support.
+     */
+    val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent>
+
+    /**
      * Current connection lifecycle, for the UI to observe. Starts at
      * [WatchEngineConnectionState.DISCONNECTED] and advances through scan → connect → bind → sync.
      * Hot and conflated (a [StateFlow]); safe to collect from Compose.
@@ -113,4 +121,11 @@ enum class WatchNotificationCategory {
     EMAIL,
     CALL,
     MISSED_CALL,
+}
+
+/** A control action the watch asks the phone to perform (W7 call control). */
+enum class WatchControlEvent {
+    ANSWER_CALL,
+    REJECT_CALL,
+    MUTE_CALL,
 }
