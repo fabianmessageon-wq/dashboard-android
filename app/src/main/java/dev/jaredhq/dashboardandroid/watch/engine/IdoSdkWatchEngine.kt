@@ -27,6 +27,7 @@ import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
 import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
+import com.veryfit.multi.nativeprotocol.Protocol
 import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -77,6 +78,20 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             // SDK lifecycle hooks. onApplicationCreate must run before init().
             BLEManager.onApplicationCreate(app)
             BLEManager.init(buildInitParam())
+            // InitParam.isEnableLog only gates the SDK's on-device *file* log (ido-logs/). The
+            // native protocol layer (libVeryFitMulti.so) independently prints raw BLE TX/RX frames
+            // AND notification contact/body to logcat under tag "DEBUG LOG" regardless of that flag
+            // — verified on a release build. In a release/private daily-use build that would leak
+            // SMS/caller text and decoded health frames into logcat and `adb bugreport` captures.
+            // Silence the native logcat stream off the debug build. (Privacy: W7 + raw-frame
+            // redaction; CLAUDE.md "privacy-conscious raw packet logging".)
+            runCatching {
+                val p = Protocol.getInstance()
+                val logPath = (app.filesDir.absolutePath + "/ido-logs").toByteArray()
+                // EnableLog(console, file, path): kill the logcat ("DEBUG LOG") + file streams.
+                p.EnableLog(BuildConfig.DEBUG, BuildConfig.DEBUG, logPath)
+                p.ProtocolSetLogEnable(BuildConfig.DEBUG)
+            }.onFailure { Log.w(TAG, "native protocol log toggle failed", it) }
             // Parity with the stock VeryFit app (VeryFitApp.initIdoSdk → setIsNeedRemoveBondBeforeConnect(true)):
             // clear any stale OS-level bond before each connect. Our watch was originally bonded to
             // VeryFit, and on this IDO/SiFli family a stale bond is the classic cause of a connect that
