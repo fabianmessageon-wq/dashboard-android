@@ -71,6 +71,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     @Volatile
     private var initialized = false
 
+    /** Raw per-sync delivery tally (incl. callbacks we drop) for the Phase-2 support matrix. */
+    private val diagnostics = WatchSyncDiagnostics()
+
     override fun init() {
         if (initialized) return
         synchronized(this) {
@@ -247,6 +250,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // startSyncHealthData()/startSyncActivityData() concurrently instead made the watch NAK
         // the interleaved data-pull commands with status=3. Data arrives via the ISyncDataListener.
         Log.i(TAG, "syncAllData (config+health+activity+V3, sequential)")
+        diagnostics.reset()
         _connectionState.value = WatchEngineConnectionState.SYNCING
         val para = SyncPara().apply {
             // Config sync *pushes* phone settings to the watch; we only read health, and on this
@@ -414,6 +418,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             functionTableCached = info != null
             cachedFunctionInfo = info
             Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
+            if (info != null) logFunctionTable()
             if (pendingSyncAfterFunctionTable) {
                 pendingSyncAfterFunctionTable = false
                 if (functionTableCached) {
@@ -434,6 +439,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onProgress(percent: Int) { listener?.onSyncProgress(percent) }
         override fun onSuccess() {
             Log.i(TAG, "syncAllData onSuccess")
+            logSyncDiagnostics()
             _connectionState.value = postSyncState()
             listener?.onSyncComplete()
         }
@@ -441,6 +447,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             // Often the benign post-transfer conn-param step failing after all data is delivered
             // (roadmap W4) — the link is usually still up, so reflect actual connectivity.
             Log.w(TAG, "syncAllData onFailed: $type")
+            logSyncDiagnostics()
             _connectionState.value = postSyncState()
             listener?.onSyncFailed()
         }
@@ -454,7 +461,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
      */
     private val syncDataListener = object : ISyncDataListener {
         override fun onGetActivityData(data: HealthActivity?) {
-            data?.let { listener?.onActivityDay(it.toDomain()) }
+            data?.let {
+                diagnostics.record(WatchSyncDiagnostics.ACTIVITY_DAY_V2, parentRecords = 1, mappedReadings = 1)
+                listener?.onActivityDay(it.toDomain())
+            }
         }
 
         override fun onGetHeartRateData(
@@ -462,14 +472,26 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items: MutableList<HealthHeartRateItem>?,
             isLast: Boolean,
         ) {
-            data?.let { listener?.onHeartRateDay(it.toDomain()) }
+            data?.let {
+                diagnostics.record(
+                    WatchSyncDiagnostics.HEART_RATE_DAY_V2,
+                    parentRecords = 1, itemSamples = items?.size ?: 0, mappedReadings = 1,
+                )
+                listener?.onHeartRateDay(it.toDomain())
+            }
         }
 
         override fun onGetSleepData(
             data: HealthSleep?,
             items: MutableList<HealthSleepItem>?,
         ) {
-            data?.let { listener?.onSleepSession(it.toDomain()) }
+            data?.let {
+                diagnostics.record(
+                    WatchSyncDiagnostics.SLEEP_V2,
+                    parentRecords = 1, itemSamples = items?.size ?: 0, mappedReadings = 1,
+                )
+                listener?.onSleepSession(it.toDomain())
+            }
         }
 
         override fun onGetSportData(
@@ -477,7 +499,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items: MutableList<HealthSportItem>?,
             isLast: Boolean,
         ) {
-            if (data != null) Log.d(TAG, "onGetSportData (workout) — mapping deferred (W6)")
+            // Delivered but dropped (no clean v2-workout mapping; this device uses the V3 path).
+            if (data != null) {
+                diagnostics.record(WatchSyncDiagnostics.SPORT_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+                Log.d(TAG, "onGetSportData (workout) — mapping deferred (W6)")
+            }
         }
 
         override fun onGetBloodPressureData(
@@ -485,18 +511,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items: MutableList<HealthBloodPressedItem>?,
             isLast: Boolean,
         ) {
-            if (data != null) Log.d(TAG, "onGetBloodPressureData — mapping deferred (W6)")
+            // Delivered but dropped (v2 BP; this device reports BP on the V3 path below).
+            if (data != null) {
+                diagnostics.record(WatchSyncDiagnostics.BLOOD_PRESSURE_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+                Log.d(TAG, "onGetBloodPressureData — mapping deferred (W6)")
+            }
         }
 
         // ── V3 health (this watch's real path) ──
         override fun onGetHealthSleepV3Data(data: HealthSleepV3?) {
             // The sync stream can include empty/sentinel records (year 0, all-zero) — skip them.
             if (data == null || data.get_up_year == 0) return
+            diagnostics.record(WatchSyncDiagnostics.SLEEP_V3, parentRecords = 1, mappedReadings = 1)
             listener?.onSleepSession(data.toDomain())
         }
 
         override fun onGetHealthActivityV3Data(data: HealthActivityV3?) {
             if (data == null || data.year == 0) return
+            diagnostics.record(WatchSyncDiagnostics.WORKOUT_V3, parentRecords = 1, mappedReadings = 1)
             listener?.onWorkout(data.toWorkout())
         }
 
@@ -511,6 +543,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             isLast: Boolean,
         ) {
             if (data == null || data.year == 0 || items.isNullOrEmpty()) return
+            var mapped = 0
             items.forEach { item ->
                 if (item.value <= 0) return@forEach
                 // SpO2 item.offset is the sample's minute-of-day within the parent day.
@@ -518,12 +551,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     localDateTime(data.year, data.month, data.day, item.offset * 60)
                 }.onSuccess { ts ->
                     listener?.onSpo2Reading(WatchSpo2Reading(recordedAt = ts, percent = item.value))
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.SPO2, parentRecords = 1, itemSamples = items.size, mappedReadings = mapped)
         }
 
         override fun onGetHealthHRV(data: com.ido.ble.data.manage.database.HealthHRVdata?) {
             if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            var mapped = 0
             data.items.forEach { item ->
                 if (item.hrvValue <= 0) return@forEach
                 // minOffset is minutes from the day's startTime (both minute-of-day units).
@@ -531,12 +567,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     localDateTime(data.year, data.month, data.day, (data.startTime + item.minOffset) * 60)
                 }.onSuccess { ts ->
                     listener?.onHrvReading(WatchHrvReading(recordedAt = ts, hrvMs = item.hrvValue))
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.HRV, parentRecords = 1, itemSamples = data.items.size, mappedReadings = mapped)
         }
 
         override fun onGetHealthRespiratoryRate(data: com.ido.ble.data.manage.database.HealthRespiratoryRate?) {
             if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            var mapped = 0
             data.items.forEach { item ->
                 if (item.respid <= 0) return@forEach
                 // respiratory item.start_time is the sample's minute-of-day.
@@ -546,12 +585,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     listener?.onRespiratoryReading(
                         WatchRespiratoryReading(recordedAt = ts, breathsPerMinute = item.respid)
                     )
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.RESPIRATORY, parentRecords = 1, itemSamples = data.items.size, mappedReadings = mapped)
         }
 
         override fun onGetHealthBodyPower(data: com.ido.ble.data.manage.database.HealthBodyPower?) {
             if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            var mapped = 0
             data.items.forEach { item ->
                 if (item.value <= 0) return@forEach
                 // body-power item.offset is minutes from the day's start_time.
@@ -559,8 +601,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
                 }.onSuccess { ts ->
                     listener?.onBodyEnergyReading(WatchBodyEnergyReading(recordedAt = ts, energy = item.value))
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.BODY_ENERGY, parentRecords = 1, itemSamples = data.items.size, mappedReadings = mapped)
         }
 
         override fun onGetHealthTemperature(data: com.ido.ble.data.manage.database.HealthTemperature?) {
@@ -570,6 +614,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             val baseSeconds = data.hour * 3600 + data.minute * 60 + data.sec
             val unitSeconds =
                 if (data.time_offset_unit == com.ido.ble.data.manage.database.HealthTemperature.TIME_OFFSET_UNIT_MINUTE) 60 else 1
+            var mapped = 0
             data.items.forEach { item ->
                 if (item.value <= 0) return@forEach
                 // Raw value is centi-degrees Celsius (e.g. 3650 → 36.50 °C).
@@ -579,8 +624,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     listener?.onTemperatureReading(
                         WatchTemperatureReading(recordedAt = ts, celsius = item.value / 100.0)
                     )
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.TEMPERATURE, parentRecords = 1, itemSamples = data.items.size, mappedReadings = mapped)
         }
 
         // V3 blood pressure → one WatchBloodPressureReading per sample. Each item carries
@@ -589,6 +636,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // caveat applies; the date prefix is always exact). Skip sentinel/zero rows.
         override fun onGetHealthBloodPressure(data: com.ido.ble.data.manage.database.HealthBloodPressureV3?) {
             if (data == null || data.year == 0 || data.items.isNullOrEmpty()) return
+            var mapped = 0
             data.items.forEach { item ->
                 if (item.sys_blood <= 0 || item.dias_blood <= 0) return@forEach
                 runCatching {
@@ -601,8 +649,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                             diastolic = item.dias_blood,
                         )
                     )
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.BLOOD_PRESSURE_V3, parentRecords = 1, itemSamples = data.items.size, mappedReadings = mapped)
         }
 
         // IDO "pressure" is the mental-stress metric (0–100); each item is one sample with a value and
@@ -615,14 +665,17 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             isLast: Boolean,
         ) {
             if (data == null || data.year == 0 || items.isNullOrEmpty()) return
+            var mapped = 0
             items.forEach { item ->
                 if (item.value <= 0) return@forEach
                 runCatching {
                     localDateTime(data.year, data.month, data.day, (data.startTime + item.offset) * 60)
                 }.onSuccess { ts ->
                     listener?.onStressReading(WatchStressReading(recordedAt = ts, stressScore = item.value))
+                    mapped++
                 }
             }
+            diagnostics.record(WatchSyncDiagnostics.STRESS, parentRecords = 1, itemSamples = items.size, mappedReadings = mapped)
         }
 
         // V3 daily activity rollup → WatchActivityDay. This V3-only watch never fires the v2
@@ -632,22 +685,82 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onGetHealthSportV3Data(data: HealthSportV3?) {
             if (data == null || data.year == 0) return
             if (data.total_step <= 0L && data.total_distances <= 0 && data.total_activity_calories <= 0) return
+            diagnostics.record(WatchSyncDiagnostics.ACTIVITY_DAY_V3, parentRecords = 1, mappedReadings = 1)
             listener?.onActivityDay(data.toActivityDay())
         }
 
-        // ── Still logged-only — no domain model / dashboard column yet, or no clean mapping:
+        // ── Delivered but dropped — no domain model / dashboard column yet, or no clean mapping:
         //   GPS, drink plan, body composition (needs a paired bio-impedance scale + int→real value
         //   scale to confirm — won't fire on a wrist watch), noise, swimming, ECG, second-by-second
-        //   HR, and emotion-health (a categorical mood code, not a 0–100 score). ──
-        override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {}
-        override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {}
-        override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {}
-        override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {}
-        override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {}
-        override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {}
-        override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {}
-        override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {}
-        override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {}
+        //   HR, and emotion-health (a categorical mood code, not a 0–100 score). Each now records a
+        //   diagnostics tally so a real sync reveals whether the Active 4 Pro emits it (Phase 2). ──
+        override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.DRINK_PLAN, parentRecords = 1)
+        }
+        override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.GPS_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+        }
+        override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.BODY_COMPOSITION, parentRecords = 1)
+        }
+        override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.GPS_V3, parentRecords = 1)
+        }
+        override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1)
+        }
+        override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.NOISE, parentRecords = 1)
+        }
+        override fun onGetHealthSwimmingData(data: com.ido.ble.data.manage.database.HealthSwimming?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.SWIMMING, parentRecords = 1)
+        }
+        override fun onGetHealthV3EcgData(data: com.ido.ble.data.manage.database.HealthV3Ecg?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.ECG, parentRecords = 1)
+        }
+        override fun onGetHealthV3EmotionHealthData(data: com.ido.ble.data.manage.database.HealthV3EmotionHealth?) {
+            if (data != null) diagnostics.record(WatchSyncDiagnostics.EMOTION, parentRecords = 1)
+        }
+    }
+
+    // ── Phase-2 instrumentation: diagnostics summary + metric confidence ──────────────
+
+    /**
+     * Read a boolean `SupportFunctionInfo` capability flag by field name, reflectively (the struct
+     * has 600+ fields; reflection keeps the metric→flag map data-driven in [WatchMetric]). Returns
+     * null when the table hasn't arrived, the metric has no flag, or the field name doesn't resolve.
+     */
+    private fun readFunctionFlag(field: String?): Boolean? {
+        if (field.isNullOrEmpty()) return null
+        val info = cachedFunctionInfo ?: return null
+        return runCatching { info.javaClass.getField(field).getBoolean(info) }.getOrNull()
+    }
+
+    /** Log which health-relevant capability flags the connected watch advertises (counts-only). */
+    private fun logFunctionTable() {
+        val flags = WatchMetric.entries
+            .mapNotNull { m -> m.functionTableField?.let { "${m.diagnosticsKey}=${readFunctionFlag(it)}" } }
+            .joinToString(", ")
+        Log.i(TAG, "function table (health flags): $flags")
+    }
+
+    /**
+     * Emit the counts-only sync tally, the delivered-but-dropped list, and a per-metric confidence
+     * line — the raw evidence for the Phase-2 metric support matrix. Privacy-safe (no values), so it
+     * stays on in release. "Emitted" uses mapped readings for the mapped metrics and parent records
+     * for the dropped sinks, so a watch that *delivers* a dropped metric still shows it as emitted.
+     */
+    private fun logSyncDiagnostics() {
+        Log.i(TAG, "sync diagnostics: ${diagnostics.summary()}")
+        val dropped = diagnostics.droppedMetrics()
+        if (dropped.isNotEmpty()) Log.i(TAG, "sync delivered-but-dropped: ${dropped.joinToString()}")
+        val snap = diagnostics.snapshot()
+        val matrix = WatchMetric.entries.joinToString("; ") { m ->
+            val tally = snap[m.diagnosticsKey]
+            val emitted = tally != null && (tally.mappedReadings > 0 || (!m.uploaded && tally.parentRecords > 0))
+            "${m.diagnosticsKey}=${m.confidence(readFunctionFlag(m.functionTableField), emitted)}"
+        }
+        Log.i(TAG, "metric confidence: $matrix")
     }
 
     // ── Mappers (SDK type → domain) ─────────────────────────────────────────────────
