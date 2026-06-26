@@ -1,10 +1,13 @@
 package dev.jaredhq.dashboardandroid
 
 import dev.jaredhq.dashboardandroid.ui.watch.WatchHealthViewModel
+import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -60,11 +63,16 @@ class WatchHealthViewModelTest {
         override fun syncHealth() { conn.value = WatchEngineConnectionState.SYNCING }
     }
 
-    private fun vmWith(engine: FakeEngine, registered: Array<WatchHealthListener?> = arrayOf(null)) =
+    private fun vmWith(
+        engine: FakeEngine,
+        registered: Array<WatchHealthListener?> = arrayOf(null),
+        uploadReg: Array<((WatchUploadOutcome) -> Unit)?> = arrayOf(null),
+    ) =
         WatchHealthViewModel(
             engine = engine,
             deviceId = "F4:91:29:51:C6:45",
             registerUiListener = { registered[0] = it },
+            registerUploadListener = { uploadReg[0] = it },
         )
 
     private val workout = WatchWorkout(
@@ -165,6 +173,87 @@ class WatchHealthViewModelTest {
     }
 
     @Test
+    fun bpAndStressCallbacksIncrementCountsAndTotal() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val registered = arrayOf<WatchHealthListener?>(null)
+        val vm = vmWith(engine, registered)
+        val listener = requireNotNull(registered[0])
+
+        engine.conn.value = WatchEngineConnectionState.SYNCING
+        advanceUntilIdle()
+
+        listener.onBloodPressureReading(WatchBloodPressureReading("2026-06-24 10:00:00", 120, 80))
+        listener.onStressReading(WatchStressReading("2026-06-24 10:01:00", 40))
+        listener.onStressReading(WatchStressReading("2026-06-24 10:02:00", 42))
+
+        val counts = vm.state.value.liveCounts
+        assertEquals(1, counts.bloodPressure)
+        assertEquals(2, counts.stress)
+        assertEquals(3, counts.total) // BP + stress now contribute to the tally the screen shows
+    }
+
+    @Test
+    fun uploadOutcomeSuccessAttachesToMostRecentLastSync() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val registered = arrayOf<WatchHealthListener?>(null)
+        val uploadReg = arrayOf<((WatchUploadOutcome) -> Unit)?>(null)
+        val vm = vmWith(engine, registered, uploadReg)
+        val listener = requireNotNull(registered[0])
+        val reportUpload = requireNotNull(uploadReg[0]) { "VM should register an upload listener" }
+
+        engine.conn.value = WatchEngineConnectionState.SYNCING
+        advanceUntilIdle()
+        listener.onStressReading(WatchStressReading("2026-06-24 10:00:00", 40))
+        listener.onSyncComplete()
+
+        reportUpload(WatchUploadOutcome(succeeded = true, sentCount = 1, storedCount = 1, error = null))
+
+        val status = requireNotNull(vm.state.value.lastSync?.upload)
+        assertTrue(status.succeeded)
+        assertEquals(1, status.sentCount)
+        assertEquals(1, status.storedCount)
+        assertNull(status.error)
+    }
+
+    @Test
+    fun uploadOutcomeFailureAttachesWithError() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val registered = arrayOf<WatchHealthListener?>(null)
+        val uploadReg = arrayOf<((WatchUploadOutcome) -> Unit)?>(null)
+        val vm = vmWith(engine, registered, uploadReg)
+        val listener = requireNotNull(registered[0])
+        val reportUpload = requireNotNull(uploadReg[0])
+
+        engine.conn.value = WatchEngineConnectionState.SYNCING
+        advanceUntilIdle()
+        listener.onWorkout(workout)
+        listener.onSyncComplete()
+
+        reportUpload(WatchUploadOutcome(succeeded = false, sentCount = 5, storedCount = 0, error = "timeout"))
+
+        val status = requireNotNull(vm.state.value.lastSync?.upload)
+        assertFalse(status.succeeded)
+        assertEquals("timeout", status.error)
+        assertEquals(5, status.sentCount)
+        assertEquals(0, status.storedCount)
+    }
+
+    @Test
+    fun uploadOutcomeBeforeAnyLastSyncIsIgnored() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val uploadReg = arrayOf<((WatchUploadOutcome) -> Unit)?>(null)
+        val vm = vmWith(engine, uploadReg = uploadReg)
+        val reportUpload = requireNotNull(uploadReg[0])
+
+        // No sync has finished yet, so there is no summary to attach to.
+        assertNull(vm.state.value.lastSync)
+        reportUpload(WatchUploadOutcome(succeeded = true, sentCount = 2, storedCount = 2))
+
+        // The outcome is dropped rather than crashing or fabricating a summary.
+        assertNull(vm.state.value.lastSync)
+    }
+
+    @Test
     fun onClearedUnregistersUiListener() = runTest(dispatcher) {
         val engine = FakeEngine()
         val registered = arrayOf<WatchHealthListener?>(null)
@@ -174,11 +263,22 @@ class WatchHealthViewModelTest {
         vm.viewModelClearedForTest()
         assertNull(registered[0])
     }
+
+    @Test
+    fun onClearedUnregistersUploadListener() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val uploadReg = arrayOf<((WatchUploadOutcome) -> Unit)?>(null)
+        val vm = vmWith(engine, uploadReg = uploadReg)
+        assertNotNull(uploadReg[0])
+
+        vm.viewModelClearedForTest()
+        assertNull(uploadReg[0])
+    }
 }
 
 /** onCleared is protected; expose it for the test via an extension into the same module. */
 private fun WatchHealthViewModel.viewModelClearedForTest() {
-    val m = androidx.lifecycle.ViewModel::class.java.getDeclaredMethod("onCleared")
+    val m = WatchHealthViewModel::class.java.getDeclaredMethod("onCleared")
     m.isAccessible = true
     m.invoke(this)
 }

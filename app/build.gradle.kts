@@ -24,11 +24,19 @@ android {
         // ship only arm ABIs (ADR 0001). Constrain packaging to those so the build
         // doesn't expect x86 variants the SDK never provided.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // Default safe value for any future custom build type; debug opts into local cleartext below.
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
     }
 
     buildTypes {
+        debug {
+            // Local-dev dashboards may use http://10.0.2.2 or LAN HTTP while iterating.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
         release {
             isMinifyEnabled = false
+            // Private daily-use builds must not allow accidental cleartext dashboard traffic.
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -110,11 +118,9 @@ dependencies {
     // obfuscated helper classes (top-level wordlist packages acorn/basilisk/… + a-n)
     // which the obfuscator scattered across every dex. Excludes only what the app already
     // provides via Gradle (androidx/kotlin/kotlinx/okhttp3/okio/retrofit2) and the VeryFit
-    // UI. gson + greenrobot (greenDAO/EventBus) ship INSIDE this jar at the exact versions
-    // the SDK was compiled against — so no separate Gradle deps for them (avoids skew + dupes).
-    // Native .so files live in src/main/jniLibs/. Only IdoSdkWatchEngine imports com.ido.*.
+    // UI. Native .so files live in src/main/jniLibs/. Only IdoSdkWatchEngine imports com.ido.*.
     // OSS libs the SDK uses (greenDAO, gson) come from Gradle, not the jar, to avoid
-    // duplicate-class conflicts with the app's transitive graph.
+    // duplicate-class conflicts with the app's transitive graph and to keep versions explicit.
     implementation(files("libs/ido-watch-sdk.jar"))
     implementation(libs.greendao)
     implementation(libs.gson)

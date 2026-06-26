@@ -51,16 +51,16 @@ dashboard (the server owns the contract; this owns the phone). See the plan:
 
 The Active 4 Pro / VeryFit BLE work is currently a **Fabian-private build first**, not a monetized/general-user product track. The immediate goal is practical, privacy-first direct sync from Fabian's watch and phone into Fabian's self-hosted dashboard.
 
-Current BLE status:
+As of 2026-06-26, the fastest path is **not** a full VeryFit APK fork/rebrand and not a full clean-room protocol rebuild. The direction is a targeted private engine: keep this app's Kotlin/Compose dashboard shell, keep the vendored IDO/VeryFit SDK/native libs quarantined behind `WatchEngine` / `IdoSdkWatchEngine`, use `/home/apolytus/workspace/veryfit-breakdown/` as the SDK workflow oracle, and avoid VeryFit UI, ads, branding, membership, maps, analytics, vendor cloud, and third-party telemetry. See [`docs/plans/veryfit-private-engine-workflow.md`](docs/plans/veryfit-private-engine-workflow.md) and [`docs/adr/0001-vendor-ido-sdk.md`](docs/adr/0001-vendor-ido-sdk.md).
 
-- Phase 1 status/identity transport is watch-verified for the `0x02` family commands:
-  - `02 04` → MAC response
-  - `02 01` → basic info/status response
-  - `02 A7` → battery response
-- The `ble-stability-ready-lifecycle` work adds a ready-gated BLE lifecycle, serialized write queue, hardened notification/indication setup, and strict `02 01` basic-info parsing.
-- `33 DA AD` activity reassembly/decoding is the next private-build milestone; full health/activity sync and commercial polish are intentionally deferred.
+Current watch private-engine status:
 
-For the current execution plan, see [`docs/plans/ble-master-plan.md`](docs/plans/ble-master-plan.md), especially the Fabian-private implementation phases.
+- The active implementation path is the vendored IDO/VeryFit SDK engine behind `WatchEngine` / `IdoSdkWatchEngine`, not the old manual clean-room BLE stack.
+- Health sync/upload is the primary path: SDK callbacks provide decoded activity, sleep, HR, workout, and V3 point metrics; Android uploads them to `POST /api/widget/v1/watch/health` on Fabian's configured dashboard origin.
+- The old `0x02` identity probes and `33 DA AD` activity-decoding notes remain useful historical protocol evidence, but they are no longer the next implementation milestone.
+- Current remaining work is source/static review, deferred JVM/build/lint execution, and real phone/watch verification as tracked in [`docs/watch-private-engine-test-plan.md`](docs/watch-private-engine-test-plan.md).
+
+For the current execution plan, see [`docs/plans/veryfit-private-engine-workflow.md`](docs/plans/veryfit-private-engine-workflow.md). Use the clean-room BLE docs only as historical/reference material.
 
 ## API contract
 
@@ -97,7 +97,9 @@ The base URL should be your dashboard's HTTPS origin reachable from the phone �
 typically the Tailscale MagicDNS HTTPS URL (e.g.
 `https://dashboard.your-tailnet.ts.net`). Tailscale Serve/Funnel issues a valid
 Let's Encrypt cert for `*.ts.net`, so standard HTTPS validation works with **no
-custom certificate handling** — the app ships no cleartext/trust-all config.
+custom certificate handling**. Release/private daily-use builds reject cleartext
+`http://`; debug builds keep cleartext only for local-dev origins such as
+`http://10.0.2.2`.
 
 > **The phone must be on the tailnet.** A MagicDNS `*.ts.net` name only resolves
 > when the Tailscale app is installed and connected on the phone. If
@@ -108,8 +110,9 @@ custom certificate handling** — the app ships no cleartext/trust-all config.
 ### Future: public deployment
 
 The networking layer is origin-agnostic: `ApiClientFactory.normalizeBaseUrl`
-accepts any valid `https://` (or `http://` for local dev) origin and the bearer
-token works the same way regardless of how the dashboard is reached. To point the
+accepts any valid `https://` origin, plus `http://` local-dev origins in debug
+builds, and the bearer token works the same way regardless of how the dashboard
+is reached. To point the
 same app at a monetised/public backend, the user just changes the **Dashboard
 URL** in Settings — no rebuild.
 
@@ -156,6 +159,8 @@ skip this step.
 
 ## Tests
 
+Current branch note: for the watch private-engine work, test execution is currently deferred in this Hermes environment; see [`docs/watch-private-engine-test-plan.md`](docs/watch-private-engine-test-plan.md) for commands and pending result slots.
+
 Pure-JVM unit tests run without a device or emulator:
 
 ```bash
@@ -195,14 +200,26 @@ Pure-JVM unit tests run without a device or emulator:
 
 ## Verification status — IMPORTANT
 
-Much of this project was originally authored in an environment **without** the
-Android toolchain. That gate has since been partially lifted — see what is and
-isn't verified below.
+### Current branch / current Hermes environment (2026-06-26)
 
-### ✅ Verified on real hardware (2026-06-22)
+Build/test execution for the active watch private-engine branch is intentionally deferred until the current implementation/review lanes finish. This Hermes environment currently cannot run Gradle because Java/Android tooling is unavailable:
 
-The **BLE / Watch path** was built and run end-to-end on a real phone against the
-real watch:
+```text
+ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+```
+
+Do not treat the active uncommitted branch as green until the checklist in [`docs/watch-private-engine-test-plan.md`](docs/watch-private-engine-test-plan.md) is completed, especially:
+
+- `./gradlew testDebugUnitTest`
+- `./gradlew assembleDebug`
+- `./gradlew lintDebug`
+- real phone/watch verification
+
+Source/static checks already completed are recorded in that test plan.
+
+### Historical clean-room BLE hardware verification (2026-06-22)
+
+The earlier manual BLE / clean-room watch path was built and run end-to-end on a real phone against the real watch. These results are historical protocol evidence, not proof that the current private-engine branch has passed build/test/device verification:
 
 - ✅ **Compiled.** `./gradlew assembleDebug` builds (JDK 17 via Android Studio's
   bundled `jbr`, Gradle 8.10.2; the wrapper JAR is gitignored — regenerate with
@@ -219,7 +236,7 @@ real watch:
   See `docs/plans/ble-phase-1-probe.md` and
   `docs/plans/ble-protocol-reverse-engineering-plan.md`.
 
-### ❌ Not yet exercised at runtime
+### ❌ Current runtime verification still pending
 
 - ❌ **Today / Capture / Settings / widgets / notifications.** The Glance widget,
   WorkManager refresh, dictation, and dashboard API paths compile and have JVM
@@ -227,10 +244,7 @@ real watch:
   on-device in this environment.
 - ✅ **Contract verified against the dashboard server source**, not guessed.
 
-**Before relying on the dashboard paths:** open in Android Studio, sync, run
-`./gradlew testDebugUnitTest`, then `assembleDebug`, and fix any version-skew the
-local SDK surfaces (most likely AGP/Kotlin/Compose-BOM alignment in
-`gradle/libs.versions.toml`).
+**Before relying on the current branch:** open in Android Studio, sync, run the deferred commands in [`docs/watch-private-engine-test-plan.md`](docs/watch-private-engine-test-plan.md), then exercise the real phone/watch workflow there. Fix any version-skew the local SDK surfaces (most likely AGP/Kotlin/Compose-BOM alignment in `gradle/libs.versions.toml`).
 
 ## Manual test plan
 

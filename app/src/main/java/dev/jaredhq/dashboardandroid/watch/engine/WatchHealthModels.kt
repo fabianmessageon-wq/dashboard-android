@@ -204,3 +204,17 @@ data class WatchHealthUploadResult(
     val accepted: Boolean,
     val storedCount: Int = 0,
 )
+
+/**
+ * Outcome of a dashboard upload attempt, surfaced to the Watch screen so a sync that decoded data
+ * but failed to reach the dashboard is visible (rather than reading as a clean "completed" sync).
+ *
+ * [sentCount] is how many records the batch held; [storedCount] is the server's acknowledged count
+ * (0 on failure). [error] is a short failure reason for the UI, or null on success.
+ */
+data class WatchUploadOutcome(
+    val succeeded: Boolean,
+    val sentCount: Int,
+    val storedCount: Int = 0,
+    val error: String? = null,
+)

@@ -43,11 +43,18 @@ class BaseUrlNormalizationTest {
     }
 
     @Test
-    fun allowsHttpForLocalDev() {
+    fun allowsHttpForLocalDevWhenCleartextEnabled() {
         assertEquals(
             "http://10.0.2.2:3000/",
-            ApiClientFactory.normalizeBaseUrl("http://10.0.2.2:3000"),
+            ApiClientFactory.normalizeBaseUrl("http://10.0.2.2:3000", allowCleartext = true),
         )
+    }
+
+    @Test
+    fun rejectsHttpWhenCleartextDisabled() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ApiClientFactory.normalizeBaseUrl("http://10.0.2.2:3000", allowCleartext = false)
+        }
     }
 
     @Test

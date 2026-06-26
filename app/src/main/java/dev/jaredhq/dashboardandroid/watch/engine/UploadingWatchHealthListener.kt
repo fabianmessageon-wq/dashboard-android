@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.watch.engine
 
 import android.util.Log
+import dev.jaredhq.dashboardandroid.BuildConfig
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -16,13 +17,19 @@ import kotlinx.coroutines.launch
  * failure would lose a complete dataset.
  *
  * Callbacks arrive on the SDK's (UI) thread; buffering is synchronized and the actual network
- * upload is launched on [scope] (off the callback thread). Each record is also logged for
- * on-device observability.
+ * upload is launched on [scope] (off the callback thread). Detailed record bodies are logged only
+ * in debug builds because these domain objects contain private decoded health values.
  */
 class UploadingWatchHealthListener(
     private val repository: DashboardRepository,
     private val scope: CoroutineScope,
     private val deviceId: String,
+    /**
+     * Optional sink for the dashboard upload result, so the Watch screen can show whether the
+     * decoded data actually reached the dashboard (the BLE sync succeeding does not imply the
+     * upload did). Invoked on [scope]; defaults to a no-op for headless/worker uploads.
+     */
+    private val onUploadOutcome: (WatchUploadOutcome) -> Unit = {},
 ) : WatchHealthListener {
 
     private val lock = Any()
@@ -39,57 +46,57 @@ class UploadingWatchHealthListener(
     private val stressReadings = mutableListOf<WatchStressReading>()
 
     override fun onActivityDay(day: WatchActivityDay) {
-        Log.i(TAG, "ACTIVITY $day")
+        logPrivateRecord("ACTIVITY", day)
         synchronized(lock) { activityDays += day }
     }
 
     override fun onHeartRateDay(day: WatchHeartRateDay) {
-        Log.i(TAG, "HEART_RATE $day")
+        logPrivateRecord("HEART_RATE", day)
         synchronized(lock) { heartRateDays += day }
     }
 
     override fun onSleepSession(session: WatchSleepSession) {
-        Log.i(TAG, "SLEEP $session")
+        logPrivateRecord("SLEEP", session)
         synchronized(lock) { sleepSessions += session }
     }
 
     override fun onWorkout(workout: WatchWorkout) {
-        Log.i(TAG, "WORKOUT $workout")
+        logPrivateRecord("WORKOUT", workout)
         synchronized(lock) { workouts += workout }
     }
 
     override fun onSpo2Reading(reading: WatchSpo2Reading) {
-        Log.i(TAG, "SPO2 $reading")
+        logPrivateRecord("SPO2", reading)
         synchronized(lock) { spo2Readings += reading }
     }
 
     override fun onHrvReading(reading: WatchHrvReading) {
-        Log.i(TAG, "HRV $reading")
+        logPrivateRecord("HRV", reading)
         synchronized(lock) { hrvReadings += reading }
     }
 
     override fun onRespiratoryReading(reading: WatchRespiratoryReading) {
-        Log.i(TAG, "RESP $reading")
+        logPrivateRecord("RESP", reading)
         synchronized(lock) { respiratoryReadings += reading }
     }
 
     override fun onTemperatureReading(reading: WatchTemperatureReading) {
-        Log.i(TAG, "TEMP $reading")
+        logPrivateRecord("TEMP", reading)
         synchronized(lock) { temperatureReadings += reading }
     }
 
     override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) {
-        Log.i(TAG, "BODY_ENERGY $reading")
+        logPrivateRecord("BODY_ENERGY", reading)
         synchronized(lock) { bodyEnergyReadings += reading }
     }
 
     override fun onBloodPressureReading(reading: WatchBloodPressureReading) {
-        Log.i(TAG, "BLOOD_PRESSURE $reading")
+        logPrivateRecord("BLOOD_PRESSURE", reading)
         synchronized(lock) { bloodPressureReadings += reading }
     }
 
     override fun onStressReading(reading: WatchStressReading) {
-        Log.i(TAG, "STRESS $reading")
+        logPrivateRecord("STRESS", reading)
         synchronized(lock) { stressReadings += reading }
     }
 
@@ -148,9 +155,32 @@ class UploadingWatchHealthListener(
 
         scope.launch {
             repository.uploadWatchHealth(batch)
-                .onSuccess { Log.i(TAG, "uploaded ${batch.recordCount} records (stored=${it.storedCount})") }
-                .onFailure { Log.w(TAG, "health upload failed: ${it.message}") }
+                .onSuccess {
+                    Log.i(TAG, "uploaded ${batch.recordCount} records (stored=${it.storedCount})")
+                    onUploadOutcome(
+                        WatchUploadOutcome(
+                            succeeded = it.accepted,
+                            sentCount = batch.recordCount,
+                            storedCount = it.storedCount,
+                            error = if (it.accepted) null else "Dashboard rejected the upload.",
+                        ),
+                    )
+                }
+                .onFailure {
+                    Log.w(TAG, "health upload failed: ${it.message}")
+                    onUploadOutcome(
+                        WatchUploadOutcome(
+                            succeeded = false,
+                            sentCount = batch.recordCount,
+                            error = it.message ?: "Upload failed.",
+                        ),
+                    )
+                }
         }
+    }
+
+    private fun logPrivateRecord(kind: String, record: Any) {
+        if (BuildConfig.DEBUG) Log.i(TAG, "$kind $record")
     }
 
     private companion object {

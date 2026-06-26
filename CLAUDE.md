@@ -6,12 +6,12 @@ Use this as the working `CLAUDE.md` guidance for Claude Code sessions on the And
 
 ## Project context
 
-- Dashboard Android worktree: `C:\Users\davo\Documents\Claude\BLE-phone-integration\dashboard-android`
-- Main dashboard repo: `C:\Users\davo\Documents\Claude\BLE-phone-integration\dashboard` 
-- VeryFit APK artifact: `C:\Users\davo\Downloads\veryfit-3-4-0.apk` - refer to this for implementation, this already has a working Active 4 Pro BLE data collection system
+- Dashboard Android worktree: `/home/apolytus/workspace/worktrees/phone-integration-refinement/dashboard-android`
+- Main dashboard repo: `/home/apolytus/workspace/worktrees/phone-integration-refinement/dashboard`
+- VeryFit APK/reference tree: `/home/apolytus/workspace/veryfit-breakdown/` — refer to this for implementation; the official app already has a working Active 4 Pro BLE data collection system
 - VeryFit package/version researched: `com.watch.life` v3.4.0.
 - Target watch: Kogan Active 4 Pro / IDO-style VeryFit protocol family.
-- Research direction: independent clean-room Kotlin Android implementation, using VeryFit/APK/captures as protocol documentation, not as a runtime dependency unless Fabian explicitly accepts that tradeoff.
+- Current direction: Fabian-private Kotlin dashboard app using the vendored IDO/VeryFit SDK as a quarantined watch engine behind `WatchEngine` / `IdoSdkWatchEngine`. Use VeryFit/APK/captures/decompiled sources as workflow documentation and SDK-call oracle; do **not** rebuild/rebrand the full VeryFit app, and do not import VeryFit UI/ads/cloud/branding into the app shell.
 
 ## Non-negotiable safety rules
 
@@ -252,8 +252,9 @@ Do not overbuild this phase for broad smartwatch compatibility, consumer onboard
 > `jniLibs/*.so`) as a runtime dependency — the override the "Reference-guided backend rule"
 > below reserves for his approval. The SDK is quarantined behind the `WatchEngine` interface
 > (`IdoSdkWatchEngine` is the only file that may import `com.ido.*` / `com.veryfit.*`); the
-> clean-room rule below still governs **all other code** and remains the long-term target
-> (`CleanRoomWatchEngine`). See [`docs/adr/0001-vendor-ido-sdk.md`](docs/adr/0001-vendor-ido-sdk.md).
+> clean-room/source-clean rules below still govern **all app-owned code**. A future clean-room
+> engine may be reintroduced behind `WatchEngine`, but the current active tree is the private
+> SDK-backed `IdoSdkWatchEngine` path. See [`docs/adr/0001-vendor-ido-sdk.md`](docs/adr/0001-vendor-ido-sdk.md).
 > Revisit before any distribution — this approval is private-build-only.
 
 ### Reference-guided backend rule
