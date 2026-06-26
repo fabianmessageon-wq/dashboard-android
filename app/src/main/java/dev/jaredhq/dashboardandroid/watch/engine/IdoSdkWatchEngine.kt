@@ -689,11 +689,41 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onActivityDay(data.toActivityDay())
         }
 
+        // V3 "heart rate second" record carries the Active 4 Pro's intraday HR (the v2 daily-HR path
+        // never fires here). silentHR reads 0; the real data is the items[] series of bare HR values
+        // with no per-sample time. Before mapping it (would need a new point metric + dashboard
+        // column), confirm the sample interval. Probe logs date/startTime/count + first/last values
+        // and any hr_data high/low entries (those DO carry hour:minute) so the spacing can be pinned
+        // from real evidence. Debug-gated (the values are decoded health data). Mapping deferred.
+        override fun onGetHealthHeartRateSecondData(
+            data: com.ido.ble.data.manage.database.HealthHeartRateSecond?,
+            isLast: Boolean,
+        ) {
+            if (data == null || data.year == 0) return
+            val itemCount = data.items?.size ?: 0
+            diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1, itemSamples = itemCount)
+            if (BuildConfig.DEBUG) {
+                val vals = data.items?.map { it.heartRateVal } ?: emptyList()
+                val nonZero = vals.count { it > 0 }
+                val firstNonZero = vals.indexOfFirst { it > 0 }
+                val lastNonZero = vals.indexOfLast { it > 0 }
+                val hrTimes = data.hr_data?.take(4)?.map { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
+                Log.d(
+                    TAG,
+                    "heartRateSecond probe: date=${ymd(data.year, data.month, data.day)} " +
+                        "startTime=${data.startTime} items=$itemCount nonZero=$nonZero " +
+                        "firstNZidx=$firstNonZero lastNZidx=$lastNonZero " +
+                        "fiveMin=${data.five_min_data?.size ?: 0} hrDataCount=${data.hr_data_count} " +
+                        "silentHR=${data.silentHR} hrData=$hrTimes",
+                )
+            }
+        }
+
         // ── Delivered but dropped — no domain model / dashboard column yet, or no clean mapping:
         //   GPS, drink plan, body composition (needs a paired bio-impedance scale + int→real value
-        //   scale to confirm — won't fire on a wrist watch), noise, swimming, ECG, second-by-second
-        //   HR, and emotion-health (a categorical mood code, not a 0–100 score). Each now records a
-        //   diagnostics tally so a real sync reveals whether the Active 4 Pro emits it (Phase 2). ──
+        //   scale to confirm — won't fire on a wrist watch), noise, swimming, ECG, and emotion-health
+        //   (a categorical mood code, not a 0–100 score). Each records a diagnostics tally so a real
+        //   sync reveals whether the Active 4 Pro emits it (Phase 2). ──
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.DRINK_PLAN, parentRecords = 1)
         }
@@ -705,9 +735,6 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
         override fun onGetHealthGpsV3Data(data: com.ido.ble.data.manage.database.HealthGpsV3?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.GPS_V3, parentRecords = 1)
-        }
-        override fun onGetHealthHeartRateSecondData(data: com.ido.ble.data.manage.database.HealthHeartRateSecond?, isLast: Boolean) {
-            if (data != null) diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1)
         }
         override fun onGetHealthNoiseData(data: com.ido.ble.data.manage.database.HealthNoise?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.NOISE, parentRecords = 1)

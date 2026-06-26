@@ -113,9 +113,10 @@ enum class WatchMetric(
         notes = "Dropped: no domain model yet.",
     ),
     HEART_RATE_SECOND(
-        "Second-by-second HR", WatchSyncDiagnostics.HEART_RATE_SECOND,
+        "Intraday HR series", WatchSyncDiagnostics.HEART_RATE_SECOND,
         null, uploaded = false, shownInUi = false,
-        notes = "Dropped: high-volume intraday HR; daily HR summary preferred.",
+        notes = "Emitted (~282 bare HR values/day in items[]; silentHR reads 0 on the A4P). Sample " +
+            "interval being confirmed before mapping — see watch-metric-support-matrix.md.",
     ),
     BODY_COMPOSITION(
         "Body composition", WatchSyncDiagnostics.BODY_COMPOSITION,

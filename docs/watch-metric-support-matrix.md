@@ -41,7 +41,7 @@ upload/show but the watch never sends is never overstated.
 | SpO₂ | ✅ (HealthSpO2) | ✅ `ex_main3_v3_spo2_data` | ⬜ none yet³ | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Confirm emission once an SpO₂ reading exists in the window. |
 | Heart-rate day | ✅ (HealthHeartRate, v2) | ✅ `heartRate` | ⬜ none (v2 path) | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Likely never fires (V3 watch). HR may live in `heart_rate_second` instead. |
 | Respiratory | ✅ (HealthRespiratoryRate) | — no flag | ⬜ none yet | ✅ | ✅ | SDK_MODEL_ONLY | Confirm emission; no capability flag to lean on. |
-| **Second-by-second HR** | ✅ (HealthHeartRateSecond) | — no flag | ✅ **delivered, DROPPED**⁴ | ❌ | ❌ | EMITTED_ON_REAL_SYNC | **Highest-value gap.** Add domain model + schema + upload (intraday HR). |
+| Intraday HR (`heart_rate_second`) | ✅ (HealthHeartRateSecond) | — no flag | ✅ **delivered, DROPPED**⁴ | ❌ | ❌ | EMITTED_ON_REAL_SYNC | **Deferred** — record carries no mappable timestamps (see §"Intraday HR investigation"). Needs a VeryFit capture before mapping. |
 | Swimming | ✅ (HealthSwimming) | ✅ `pool_swim` | ⬜ none yet | ❌ | ❌ | FUNCTION_TABLE_SUPPORTED | Out of scope unless wanted; needs domain model + schema. |
 | Ambient noise | ✅ (HealthNoise) | ✅ `V3_health_sync_noise` | ⬜ none yet | ❌ | ❌ | FUNCTION_TABLE_SUPPORTED | Low priority; needs domain model + schema. |
 | Temperature | ✅ (HealthTemperature) | ❌ `V3_health_sync_temperature` | ⬜ none | ✅ | ✅ | SDK_MODEL_ONLY | No sensor on A4P — leave as-is. |
@@ -63,17 +63,41 @@ Notes:
    workout/sleep/SpO₂ in the incremental data). Capability is proven; emission needs the relevant
    activity on the watch, then a sync.
 4. `heart_rate_second` is **delivered by the Active 4 Pro and currently dropped** — discovered only
-   because Phase-2 instrumentation made the previously-silent no-op sinks observable.
+   because Phase-2 instrumentation made the previously-silent no-op sinks observable. Investigated
+   below; deferred (no mappable timestamps in the delivered record).
+
+## Intraday HR investigation (2026-06-26)
+
+The next slice was to surface the HR the watch sends. Instrumented the `heart_rate_second` record
+sub-fields and resynced; findings:
+
+- The v2 daily-HR path (`onGetHeartRateData`) never fires — HR comes only via `heart_rate_second`.
+- **Every timestamped/aggregate field is empty on this watch:** `silentHR = 0`, `five_min_data`
+  empty, `hr_data` (the high/low list that *does* carry `hour:minute`) empty, `hr_data_count = 0`.
+- The only data is `items[]`: ~282→286 bare `heartRateVal` ints over the day, `startTime = 0`, **no
+  per-sample timestamp**. Values are a mix of `0` and real BPM (e.g. last three = `[65, 0, 58]`).
+- Non-zero values run to the **tail** of the array while the day was only ~19:40 — inconsistent
+  with a clean 5-minute time-of-day grid (which would fill only up to "now"). Count growth was
+  slow/noisy (282→286 over 7 min), and delivery is intermittent (periodic chunk, not every sync).
+
+**Conclusion:** the `items[]` samples cannot be reliably placed on the wall clock from the delivered
+record alone — there are no per-sample offsets, and the fields that would anchor them (`hr_data`
+hour/minute, `five_min_data`, `silentHR`) are all unpopulated. Mapping would require reverse-
+engineering the sample cadence from an official-app btsnoop capture or the native decode — the
+protocol-RE work explicitly out of scope for this phase. **Intraday HR is therefore deferred**, kept
+instrumented (emitted count + a debug shape probe) and documented here.
 
 ## Phase-2 conclusion & next slice
 
 - **Instrumentation + verification: complete.** Every SDK callback is now tallied; a real sync logs
   a counts-only diagnostics summary, a delivered-but-dropped list, and a per-metric confidence line.
 - **Proven end-to-end (SHOWN_IN_UI):** activity day, body energy, stress, HRV.
-- **Capable but unverified (need on-watch activity):** workout, sleep, SpO₂.
-- **The one real gap the watch is actively sending and we drop:** second-by-second HR.
+- **Capable but unverified (need on-watch activity):** workout, sleep, SpO₂ — sync after a workout /
+  a night's sleep / an SpO₂ reading to confirm emission; all already wired through upload + UI.
+- **Intraday HR:** emitted but **deferred** — unmappable without a VeryFit capture (above).
 
-Per the Phase-2 scope, the **next implementation slice is dashboard/schema/UI only, for metrics
-proven by the real watch sync** — i.e. start with intraday HR (`heart_rate_second`): add a domain
-model + dashboard column + upload + UI count. Do **not** expand into GPS/swim/noise/TCX/cloud or
-generic smartwatch support.
+Recommended next step: confirm the **capable-but-unverified** metrics (workout/sleep/SpO₂) by
+syncing after the relevant on-watch activity — that needs **no code**, just data, and closes the
+matrix for everything the watch actually exposes cleanly. Only pursue intraday HR if a VeryFit
+btsnoop capture is available to pin the sample cadence. Do **not** expand into GPS/swim/noise/TCX/
+cloud or generic smartwatch support.
