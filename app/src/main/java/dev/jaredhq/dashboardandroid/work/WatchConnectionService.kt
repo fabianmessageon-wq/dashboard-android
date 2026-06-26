@@ -140,6 +140,10 @@ class WatchConnectionService : Service() {
             .onFailure { Log.w(TAG, "reject failed", it) }
     }
 
+    // silenceRinger needs MODIFY_PHONE_STATE (system/signature) which a normal app can't hold, so
+    // lint flags it. The call is intentionally best-effort and runCatching-guarded below, matching
+    // answerCall/rejectCall above.
+    @SuppressLint("MissingPermission")
     private fun muteRinger() {
         // Best-effort: silenceRinger needs default-dialer/system rights on most devices, so it may
         // no-op. Answer/reject are the primary controls.
