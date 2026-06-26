@@ -27,6 +27,7 @@ import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
 import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
+import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -76,6 +77,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             // SDK lifecycle hooks. onApplicationCreate must run before init().
             BLEManager.onApplicationCreate(app)
             BLEManager.init(buildInitParam())
+            // Parity with the stock VeryFit app (VeryFitApp.initIdoSdk → setIsNeedRemoveBondBeforeConnect(true)):
+            // clear any stale OS-level bond before each connect. Our watch was originally bonded to
+            // VeryFit, and on this IDO/SiFli family a stale bond is the classic cause of a connect that
+            // suddenly regresses after firmware updates or VeryFit use (see CLAUDE.md stale-bond
+            // heuristic). The SDK's own app-level claim is bind()/isBind(), independent of this.
+            BLEManager.setIsNeedRemoveBondBeforeConnect(true)
             registerCallbacks()
             initialized = true
             Log.i(TAG, "IDO SDK initialised")
@@ -87,13 +94,22 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun buildInitParam(): InitParam = InitParam().apply {
         databaseName = "ido-watch.db"
-        isSaveDeviceDataToDB = true
-        // No SQLCipher native lib is vendored — keep the SDK DB/SP unencrypted (ADR 0001).
+        // The app consumes decoded records directly from SyncPara.ISyncDataListener and uploads
+        // them through DashboardRepository; it never queries the SDK's greenDAO health DB. Avoid
+        // retaining a second local health database on device.
+        isSaveDeviceDataToDB = false
+        // Do not enable DB encryption unless SQLCipher dependency/native libs are deliberately
+        // added and verified. With SDK DB persistence disabled, this should remain false.
         isEncryptedDBData = false
-        isEncryptedSPData = false
-        isEnableLog = true
+        // VeryFit enables SDK SharedPreferences string encryption; this path is SDK-internal Java
+        // crypto and does not require SQLCipher. Existing installs may need clear-data/rebind if
+        // legacy plaintext SDK prefs fail to decrypt.
+        isEncryptedSPData = true
+        // SDK file logs can include private watch/protocol details. Keep them on only for debug
+        // builds; release/private daily-use builds should not retain extra SDK logs on device.
+        isEnableLog = BuildConfig.DEBUG
         log_save_path = app.filesDir.absolutePath + "/ido-logs"
-        log_save_days = 3
+        log_save_days = if (BuildConfig.DEBUG) 3 else 0
     }
 
     @Volatile
@@ -140,6 +156,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             listener?.onSyncFailed()
             return
         }
+        // Never let a second request fire a concurrent syncAllData() (or a duplicate
+        // getFunctionTables()) while one is already in flight/pending — the watch NAKs interleaved
+        // data-pull commands with status=3 (see [startSync]). Multiple triggers legitimately race
+        // here: the connect auto-sync, the always-on service's periodic timer, and a manual "Sync now"
+        // can all land while a run is active.
+        if (_connectionState.value == WatchEngineConnectionState.SYNCING || pendingSyncAfterFunctionTable) {
+            Log.i(TAG, "syncHealth() ignored — a sync is already in progress/pending")
+            return
+        }
         if (!functionTableCached) {
             // Without the device function table the encrypted handshake fails; fetch it first
             // and resume the sync from onGetFunctionTable below.
@@ -177,7 +202,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     supportHangUp = isCall
                     supportMute = isCall
                 }
-                Log.i(TAG, "sendNotification (V3 notice) $notice")
+                // Never log the notice contents (contact/dataText = caller name + SMS body) at
+                // release level — that would leak private message content to logcat. Path + category
+                // + body length give a hardware tester enough to confirm a send without the payload.
+                Log.i(TAG, "sendNotification (V3 notice) category=${notification.category} len=${notification.body.length}")
                 BLEManager.setV3MessageNotice(notice)
             } else {
                 val info = com.ido.ble.protocol.model.NewMessageInfo().apply {
@@ -185,7 +213,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     name = notification.appName
                     content = notification.body
                 }
-                Log.i(TAG, "sendNotification (new message) $info")
+                // Same privacy rule as the V3 path: name/content (caller + SMS body) must not reach
+                // logcat in a release build.
+                Log.i(TAG, "sendNotification (new message) category=${notification.category} len=${notification.body.length}")
                 BLEManager.setNewMessageDetailInfo(info)
             }
             true
@@ -712,22 +742,26 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         vo2Max = vO2max.nonZero(),
     )
 
-    /** Logs every decoded metric + sync lifecycle to logcat (tag [TAG]). Observability default. */
+    /** Logs decoded metric bodies only in debug builds; lifecycle messages stay visible. */
     private object LoggingWatchHealthListener : WatchHealthListener {
-        override fun onActivityDay(day: WatchActivityDay) { Log.i(TAG, "ACTIVITY $day") }
-        override fun onHeartRateDay(day: WatchHeartRateDay) { Log.i(TAG, "HEART_RATE $day") }
-        override fun onSleepSession(session: WatchSleepSession) { Log.i(TAG, "SLEEP $session") }
-        override fun onWorkout(workout: WatchWorkout) { Log.i(TAG, "WORKOUT $workout") }
-        override fun onSpo2Reading(reading: WatchSpo2Reading) { Log.i(TAG, "SPO2 $reading") }
-        override fun onHrvReading(reading: WatchHrvReading) { Log.i(TAG, "HRV $reading") }
-        override fun onRespiratoryReading(reading: WatchRespiratoryReading) { Log.i(TAG, "RESP $reading") }
-        override fun onTemperatureReading(reading: WatchTemperatureReading) { Log.i(TAG, "TEMP $reading") }
-        override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { Log.i(TAG, "BODY_ENERGY $reading") }
-        override fun onBloodPressureReading(reading: WatchBloodPressureReading) { Log.i(TAG, "BLOOD_PRESSURE $reading") }
-        override fun onStressReading(reading: WatchStressReading) { Log.i(TAG, "STRESS $reading") }
+        override fun onActivityDay(day: WatchActivityDay) { logPrivateRecord("ACTIVITY", day) }
+        override fun onHeartRateDay(day: WatchHeartRateDay) { logPrivateRecord("HEART_RATE", day) }
+        override fun onSleepSession(session: WatchSleepSession) { logPrivateRecord("SLEEP", session) }
+        override fun onWorkout(workout: WatchWorkout) { logPrivateRecord("WORKOUT", workout) }
+        override fun onSpo2Reading(reading: WatchSpo2Reading) { logPrivateRecord("SPO2", reading) }
+        override fun onHrvReading(reading: WatchHrvReading) { logPrivateRecord("HRV", reading) }
+        override fun onRespiratoryReading(reading: WatchRespiratoryReading) { logPrivateRecord("RESP", reading) }
+        override fun onTemperatureReading(reading: WatchTemperatureReading) { logPrivateRecord("TEMP", reading) }
+        override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { logPrivateRecord("BODY_ENERGY", reading) }
+        override fun onBloodPressureReading(reading: WatchBloodPressureReading) { logPrivateRecord("BLOOD_PRESSURE", reading) }
+        override fun onStressReading(reading: WatchStressReading) { logPrivateRecord("STRESS", reading) }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }
+
+        private fun logPrivateRecord(kind: String, record: Any) {
+            if (BuildConfig.DEBUG) Log.i(TAG, "$kind $record")
+        }
     }
 
     private companion object {

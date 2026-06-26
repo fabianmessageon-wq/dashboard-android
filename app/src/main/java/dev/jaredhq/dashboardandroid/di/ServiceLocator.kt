@@ -17,6 +17,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.IdoSdkWatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.UploadingWatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
+import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,14 @@ object ServiceLocator {
      */
     @Volatile
     var watchUiListener: WatchHealthListener? = null
+
+    /**
+     * Optional sink for the dashboard upload result, set by the product Watch screen's ViewModel so
+     * it can show whether the decoded sync actually reached the dashboard. Volatile: written from the
+     * UI thread, read on the upload coroutine.
+     */
+    @Volatile
+    var watchUploadListener: ((WatchUploadOutcome) -> Unit)? = null
 
     lateinit var settings: SettingsStore
         private set
@@ -107,6 +116,8 @@ object ServiceLocator {
                     repository = repository,
                     scope = watchUploadScope,
                     deviceId = watchDeviceId,
+                    // Forward the upload result to the Watch screen's listener when one is registered.
+                    onUploadOutcome = { outcome -> watchUploadListener?.invoke(outcome) },
                 )
                 // Always upload; also forward to the Watch screen's listener when one is registered.
                 it.listener = CompositeWatchHealthListener { listOfNotNull(uploader, watchUiListener) }

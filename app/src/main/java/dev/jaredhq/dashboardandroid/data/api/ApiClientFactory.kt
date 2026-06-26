@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.data.api
 
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -61,8 +62,8 @@ object ApiClientFactory {
      * Validate and normalize a user-entered URL to an **origin** with a trailing
      * slash (`scheme://host[:port]/`):
      *
-     *  - requires an `http`/`https` scheme (HTTPS strongly preferred — see docs;
-     *    `http` is tolerated only for local-dev convenience),
+     *  - requires an `http`/`https` scheme (HTTPS is required in release; `http`
+     *    is tolerated only in debug/local-dev builds),
      *  - requires a host,
      *  - strips any path / query / fragment, so the endpoint paths resolve as
      *    `…/api/widget/v1/today` rather than under a user-typed subpath,
@@ -72,7 +73,10 @@ object ApiClientFactory {
      * callers (Settings, the repository) catch it and surface the message instead
      * of crashing.
      */
-    fun normalizeBaseUrl(raw: String): String {
+    fun normalizeBaseUrl(raw: String): String =
+        normalizeBaseUrl(raw, allowCleartext = BuildConfig.DEBUG)
+
+    internal fun normalizeBaseUrl(raw: String, allowCleartext: Boolean): String {
         val trimmed = raw.trim()
         require(trimmed.isNotEmpty()) { "Enter a dashboard URL." }
         val uri = try {
@@ -84,6 +88,9 @@ object ApiClientFactory {
             ?: throw IllegalArgumentException("Start the URL with https:// (e.g. https://dashboard.your-tailnet.ts.net).")
         require(scheme == "http" || scheme == "https") {
             "URL must start with https:// (or http:// for local dev)."
+        }
+        require(scheme == "https" || allowCleartext) {
+            "Release builds require https://. Use a secure dashboard URL."
         }
         val host = uri.host?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("The URL is missing a host name.")

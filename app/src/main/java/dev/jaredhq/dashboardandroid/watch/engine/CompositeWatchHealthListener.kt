@@ -28,6 +28,8 @@ class CompositeWatchHealthListener(
     override fun onRespiratoryReading(reading: WatchRespiratoryReading) = each { it.onRespiratoryReading(reading) }
     override fun onTemperatureReading(reading: WatchTemperatureReading) = each { it.onTemperatureReading(reading) }
     override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) = each { it.onBodyEnergyReading(reading) }
+    override fun onBloodPressureReading(reading: WatchBloodPressureReading) = each { it.onBloodPressureReading(reading) }
+    override fun onStressReading(reading: WatchStressReading) = each { it.onStressReading(reading) }
     override fun onSyncProgress(percent: Int) = each { it.onSyncProgress(percent) }
     override fun onSyncComplete() = each { it.onSyncComplete() }
     override fun onSyncFailed() = each { it.onSyncFailed() }

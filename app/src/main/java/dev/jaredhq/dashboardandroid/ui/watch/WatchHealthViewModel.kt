@@ -3,6 +3,7 @@ package dev.jaredhq.dashboardandroid.ui.watch
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jaredhq.dashboardandroid.watch.engine.WatchActivityDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
@@ -13,7 +14,9 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchNotification
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,17 +37,30 @@ data class WatchSyncCounts(
     val respiratory: Int = 0,
     val temperature: Int = 0,
     val bodyEnergy: Int = 0,
+    val bloodPressure: Int = 0,
+    val stress: Int = 0,
 ) {
     val total: Int
         get() = activityDays + heartRateDays + sleepSessions + workouts +
-            spo2 + hrv + respiratory + temperature + bodyEnergy
+            spo2 + hrv + respiratory + temperature + bodyEnergy +
+            bloodPressure + stress
 }
+
+/** Result of the dashboard upload that follows a sync, for the "Last sync" card. */
+data class WatchUploadStatus(
+    val succeeded: Boolean,
+    val sentCount: Int,
+    val storedCount: Int,
+    val error: String?,
+)
 
 /** A finished sync run's outcome, for the "Last sync" card. */
 data class WatchSyncSummary(
     val at: String,          // local HH:mm:ss
     val succeeded: Boolean,  // false = ended on a failure (often the benign end-of-run step)
     val counts: WatchSyncCounts,
+    /** Dashboard upload result, or null until the post-sync upload reports back. */
+    val upload: WatchUploadStatus? = null,
 )
 
 /** Immutable snapshot the product Watch screen renders. */
@@ -79,6 +95,7 @@ class WatchHealthViewModel(
     private val engine: WatchEngine,
     private val deviceId: String,
     private val registerUiListener: (WatchHealthListener?) -> Unit,
+    private val registerUploadListener: (((WatchUploadOutcome) -> Unit)?) -> Unit = {},
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WatchHealthUiState())
@@ -94,12 +111,32 @@ class WatchHealthViewModel(
         override fun onRespiratoryReading(reading: WatchRespiratoryReading) = bump { it.copy(respiratory = it.respiratory + 1) }
         override fun onTemperatureReading(reading: WatchTemperatureReading) = bump { it.copy(temperature = it.temperature + 1) }
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) = bump { it.copy(bodyEnergy = it.bodyEnergy + 1) }
+        override fun onBloodPressureReading(reading: WatchBloodPressureReading) = bump { it.copy(bloodPressure = it.bloodPressure + 1) }
+        override fun onStressReading(reading: WatchStressReading) = bump { it.copy(stress = it.stress + 1) }
         override fun onSyncComplete() = finishSync(succeeded = true)
         override fun onSyncFailed() = finishSync(succeeded = false)
     }
 
+    /** Dashboard upload result for the most recent sync; attaches to [WatchSyncSummary.upload]. */
+    private val uploadListener: (WatchUploadOutcome) -> Unit = { outcome ->
+        _state.update { prev ->
+            val last = prev.lastSync ?: return@update prev
+            prev.copy(
+                lastSync = last.copy(
+                    upload = WatchUploadStatus(
+                        succeeded = outcome.succeeded,
+                        sentCount = outcome.sentCount,
+                        storedCount = outcome.storedCount,
+                        error = outcome.error,
+                    ),
+                ),
+            )
+        }
+    }
+
     init {
         registerUiListener(uiListener)
+        registerUploadListener(uploadListener)
         viewModelScope.launch {
             engine.connectionState.collect { conn ->
                 _state.update { prev ->
@@ -182,6 +219,7 @@ class WatchHealthViewModel(
 
     override fun onCleared() {
         registerUiListener(null)
+        registerUploadListener(null)
     }
 
     private companion object {

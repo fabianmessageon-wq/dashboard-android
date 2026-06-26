@@ -260,9 +260,29 @@ private fun LastSyncCard(summary: WatchSyncSummary) {
                 CountRow("Respiratory samples", c.respiratory)
                 CountRow("Temperature samples", c.temperature)
                 CountRow("Body-energy samples", c.bodyEnergy)
+                CountRow("Blood-pressure samples", c.bloodPressure)
+                CountRow("Stress samples", c.stress)
             }
+            summary.upload?.let { UploadStatusRow(it) }
         }
     }
+}
+
+/** Dashboard upload result for the last sync — so a failed upload after a clean BLE sync is visible. */
+@Composable
+private fun UploadStatusRow(upload: WatchUploadStatus) {
+    val text = if (upload.succeeded) {
+        "Uploaded to dashboard (${upload.storedCount} stored)"
+    } else {
+        "Dashboard upload failed: ${upload.error ?: "unknown error"}"
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        color = if (upload.succeeded) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.error,
+    )
 }
 
 /** A metric row, shown only when the count is non-zero. */
@@ -330,6 +350,34 @@ private fun PreviewSynced() {
                     counts = WatchSyncCounts(
                         sleepSessions = 1, workouts = 2, spo2 = 96, hrv = 40,
                         respiratory = 96, temperature = 96, bodyEnergy = 96,
+                        bloodPressure = 24, stress = 48,
+                    ),
+                    upload = WatchUploadStatus(
+                        succeeded = true, sentCount = 499, storedCount = 499, error = null,
+                    ),
+                ),
+            ),
+            onConnect = {}, onDisconnect = {}, onSync = {},
+            onSendTestNotification = {}, onNotificationHintShown = {},
+        )
+    }
+}
+
+@Preview(name = "Watch — upload failed", showBackground = true)
+@Composable
+private fun PreviewUploadFailed() {
+    DashboardTheme {
+        WatchHealthContent(
+            state = WatchHealthUiState(
+                connection = CONNECTED,
+                hasPermissions = true,
+                lastSync = WatchSyncSummary(
+                    at = "08:14:02",
+                    succeeded = true,
+                    counts = WatchSyncCounts(sleepSessions = 1, workouts = 2, spo2 = 96),
+                    upload = WatchUploadStatus(
+                        succeeded = false, sentCount = 99, storedCount = 0,
+                        error = "Couldn't reach the dashboard.",
                     ),
                 ),
             ),

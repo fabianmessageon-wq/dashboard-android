@@ -26,6 +26,7 @@ class AppViewModelFactory : ViewModelProvider.Factory {
                 engine = ServiceLocator.watchEngine,
                 deviceId = ServiceLocator.watchDeviceId,
                 registerUiListener = { ServiceLocator.watchUiListener = it },
+                registerUploadListener = { ServiceLocator.watchUploadListener = it },
             ) as T
         else -> throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
     }
