@@ -103,8 +103,9 @@ class FakeDashboardApiClient(
 
     override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult {
         tick()
-        // The offline fake simply acknowledges — no health data is persisted.
-        return WatchHealthUploadResult(accepted = true, storedCount = batch.recordCount)
+        // The offline fake simply acknowledges — no health data is persisted. Flag it offline so the
+        // UI/logs don't report this as a real upload (see WatchHealthUploadResult.offline).
+        return WatchHealthUploadResult(accepted = true, storedCount = batch.recordCount, offline = true)
     }
 
     private suspend fun tick() {

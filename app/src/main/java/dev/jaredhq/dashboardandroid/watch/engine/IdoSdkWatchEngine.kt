@@ -523,6 +523,21 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             // The sync stream can include empty/sentinel records (year 0, all-zero) — skip them.
             if (data == null || data.get_up_year == 0) return
             diagnostics.record(WatchSyncDiagnostics.SLEEP_V3, parentRecords = 1, mappedReadings = 1)
+            // Ground-truth capture for the W5/W6 sleep-field expansion: the toDomain() mapper drops
+            // rem_* and sleep_avg_* today, so log the raw richer fields here. DEBUG-gated, logcat-only
+            // (developer-only health data per CLAUDE.md — never uploaded model-facing). Remove once the
+            // domain model + dashboard schema carry these columns.
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    TAG,
+                    "sleepV3 capture: date=${WatchTime.ymd(data.get_up_year, data.get_up_month, data.get_up_day)} " +
+                        "getUp=${data.get_up_hour}:${data.get_up_minte} total=${data.total_sleep_time_mins} " +
+                        "deep=${data.deep_mins}(${data.deep_count}) light=${data.light_mins}(${data.light_count}) " +
+                        "wake=${data.wake_mins}(${data.wake_count}) rem=${data.rem_mins}(${data.rem_count}) " +
+                        "score=${data.sleep_score} avgHr=${data.sleep_avg_hr_value} " +
+                        "avgSpo2=${data.sleep_avg_spo2_value} avgRespir=${data.sleep_avg_respir_rate_value}",
+                )
+            }
             listener?.onSleepSession(data.toDomain())
         }
 
@@ -548,7 +563,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 if (item.value <= 0) return@forEach
                 // SpO2 item.offset is the sample's minute-of-day within the parent day.
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, item.offset * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, item.offset * 60)
                 }.onSuccess { ts ->
                     listener?.onSpo2Reading(WatchSpo2Reading(recordedAt = ts, percent = item.value))
                     mapped++
@@ -564,7 +579,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 if (item.hrvValue <= 0) return@forEach
                 // minOffset is minutes from the day's startTime (both minute-of-day units).
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, (data.startTime + item.minOffset) * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, (data.startTime + item.minOffset) * 60)
                 }.onSuccess { ts ->
                     listener?.onHrvReading(WatchHrvReading(recordedAt = ts, hrvMs = item.hrvValue))
                     mapped++
@@ -580,7 +595,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 if (item.respid <= 0) return@forEach
                 // respiratory item.start_time is the sample's minute-of-day.
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, item.start_time * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, item.start_time * 60)
                 }.onSuccess { ts ->
                     listener?.onRespiratoryReading(
                         WatchRespiratoryReading(recordedAt = ts, breathsPerMinute = item.respid)
@@ -598,7 +613,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 if (item.value <= 0) return@forEach
                 // body-power item.offset is minutes from the day's start_time.
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
                 }.onSuccess { ts ->
                     listener?.onBodyEnergyReading(WatchBodyEnergyReading(recordedAt = ts, energy = item.value))
                     mapped++
@@ -619,7 +634,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 if (item.value <= 0) return@forEach
                 // Raw value is centi-degrees Celsius (e.g. 3650 → 36.50 °C).
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, baseSeconds + item.offset * unitSeconds)
+                    WatchTime.localDateTime(data.year, data.month, data.day, baseSeconds + item.offset * unitSeconds)
                 }.onSuccess { ts ->
                     listener?.onTemperatureReading(
                         WatchTemperatureReading(recordedAt = ts, celsius = item.value / 100.0)
@@ -640,7 +655,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             data.items.forEach { item ->
                 if (item.sys_blood <= 0 || item.dias_blood <= 0) return@forEach
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, (data.start_time + item.offset) * 60)
                 }.onSuccess { ts ->
                     listener?.onBloodPressureReading(
                         WatchBloodPressureReading(
@@ -669,7 +684,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             items.forEach { item ->
                 if (item.value <= 0) return@forEach
                 runCatching {
-                    localDateTime(data.year, data.month, data.day, (data.startTime + item.offset) * 60)
+                    WatchTime.localDateTime(data.year, data.month, data.day, (data.startTime + item.offset) * 60)
                 }.onSuccess { ts ->
                     listener?.onStressReading(WatchStressReading(recordedAt = ts, stressScore = item.value))
                     mapped++
@@ -710,7 +725,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 val hrTimes = data.hr_data?.take(4)?.map { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
                 Log.d(
                     TAG,
-                    "heartRateSecond probe: date=${ymd(data.year, data.month, data.day)} " +
+                    "heartRateSecond probe: date=${WatchTime.ymd(data.year, data.month, data.day)} " +
                         "startTime=${data.startTime} items=$itemCount nonZero=$nonZero " +
                         "firstNZidx=$firstNonZero lastNZidx=$lastNonZero " +
                         "fiveMin=${data.five_min_data?.size ?: 0} hrDataCount=${data.hr_data_count} " +
@@ -793,7 +808,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     // ── Mappers (SDK type → domain) ─────────────────────────────────────────────────
 
     private fun HealthActivity.toDomain() = WatchActivityDay(
-        date = ymd(year, month, day),
+        date = WatchTime.ymd(year, month, day),
         steps = step,
         distanceMeters = distance,
         calories = calories,
@@ -811,7 +826,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     )
 
     private fun HealthHeartRate.toDomain() = WatchHeartRateDay(
-        date = ymd(year, month, day),
+        date = WatchTime.ymd(year, month, day),
         restingBpm = silentHeart.nonZero(),
         userMaxHr = UserMaxHr.nonZero(),
         warmUpThreshold = warmUpThreshold.nonZero(),
@@ -827,7 +842,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     )
 
     private fun HealthSleep.toDomain() = WatchSleepSession(
-        date = ymd(year, month, day),
+        date = WatchTime.ymd(year, month, day),
         totalMinutes = totalSleepMinutes,
         deepMinutes = deepSleepMinutes,
         lightMinutes = lightSleepMinutes,
@@ -844,7 +859,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun HealthSleepV3.toDomain() = WatchSleepSession(
         // V3 keys the night by wake-up ("get up") time.
-        date = ymd(get_up_year, get_up_month, get_up_day),
+        date = WatchTime.ymd(get_up_year, get_up_month, get_up_day),
         totalMinutes = total_sleep_time_mins,
         deepMinutes = deep_mins,
         lightMinutes = light_mins,
@@ -855,12 +870,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         score = sleep_score.nonZero(),
         sleepEndHour = get_up_hour,
         sleepEndMinute = get_up_minte,   // SDK field spelling
-        // NOTE: V3 also carries rem_mins/rem_count + sleep_avg_hr/spo2/respir — surfaced once the
-        // domain model + dashboard schema gain those columns (W6/W5).
+        // V3-only richer fields. Stage minutes/counts are passed raw (0 = genuinely no REM that
+        // night, matching deep/light/awake); the averages use nonZero() because 0 there means "not
+        // measured", not a real reading.
+        remMinutes = rem_mins,
+        remCount = rem_count,
+        avgHeartRate = sleep_avg_hr_value.nonZero(),
+        avgSpo2 = sleep_avg_spo2_value.nonZero(),
+        avgRespiratoryRate = sleep_avg_respir_rate_value.nonZero(),
     )
 
     private fun HealthSportV3.toActivityDay() = WatchActivityDay(
-        date = ymd(year, month, day),
+        date = WatchTime.ymd(year, month, day),
         steps = total_step.toInt().nonZero(),
         distanceMeters = total_distances.nonZero(),
         // Active calories for the day. `total_rest_activity_calories` (resting burn) is reported
@@ -881,8 +902,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     )
 
     private fun HealthActivityV3.toWorkout() = WatchWorkout(
-        startDateTime = ymdhms(year, month, day, hour, minute, second),
-        endDateTime = ymdhms(end_year, end_month, end_day, end_hour, end_minute, end_sec),
+        startDateTime = WatchTime.ymdhms(year, month, day, hour, minute, second),
+        endDateTime = WatchTime.ymdhms(end_year, end_month, end_day, end_hour, end_minute, end_sec),
         type = act_type,
         durationSeconds = durations.nonZero(),
         calories = calories.nonZero(),
@@ -943,28 +964,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             WatchNotificationCategory.GENERIC -> com.ido.ble.protocol.model.V3MessageNotice.TYPE_GENERAL
         }
 
-        /** Watch ints use 0 as "not measured" for several fields; surface those as null. */
-        fun Int.nonZero(): Int? = if (this != 0) this else null
-
-        fun ymd(year: Int, month: Int, day: Int): String =
-            "%04d-%02d-%02d".format(year, month, day)
-
-        fun ymdhms(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int): String =
-            "%04d-%02d-%02d %02d:%02d:%02d".format(year, month, day, hour, minute, second)
-
-        private val LOCAL_DT_FMT: java.time.format.DateTimeFormatter =
-            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-
-        /**
-         * Resolve a "YYYY-MM-DD HH:MM:SS" wall-clock string from a day + an offset in seconds from
-         * that day's local midnight. Goes through [java.time.LocalDate] so a sample that rolls past
-         * midnight carries to the next day correctly. Throws on an invalid date — callers wrap in
-         * runCatching so one bad record can't abort the sync.
-         */
-        fun localDateTime(year: Int, month: Int, day: Int, secondsFromMidnight: Int): String =
-            java.time.LocalDate.of(year, month, day)
-                .atStartOfDay()
-                .plusSeconds(secondsFromMidnight.toLong())
-                .format(LOCAL_DT_FMT)
+        // Date/time + nonZero helpers moved to WatchTime.kt (JVM-unit-tested). `nonZero` is a
+        // top-level extension in that file, so its bare call sites here resolve unchanged.
     }
 }

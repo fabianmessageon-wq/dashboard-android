@@ -49,7 +49,10 @@ enum class WatchMetric(
     // ── Mapped metrics (domain model + upload + UI all wired) ──────────────────────────
     ACTIVITY_DAY(
         "Activity day", WatchSyncDiagnostics.ACTIVITY_DAY_V3,
-        "ex_main4_v3_activity_data", uploaded = true, shownInUi = true,
+        // main8 = V3 daily-activity sync; main9 (ex_table_main9_v3_sports) is the per-exercise gate
+        // used by WORKOUT. The old "ex_main4_v3_activity_data" reads false on the A4P even though the
+        // daily rollup emits — confirmed against the captured function-table dump (2026-06-27).
+        "ex_table_main8_v3_sync_activity", uploaded = true, shownInUi = true,
         notes = "V3 daily rollup (HealthSportV3); this V3 watch never fires the v2 path.",
     ),
     WORKOUT(

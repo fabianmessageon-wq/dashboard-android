@@ -271,17 +271,26 @@ private fun LastSyncCard(summary: WatchSyncSummary) {
 /** Dashboard upload result for the last sync — so a failed upload after a clean BLE sync is visible. */
 @Composable
 private fun UploadStatusRow(upload: WatchUploadStatus) {
-    val text = if (upload.succeeded) {
-        "Uploaded to dashboard (${upload.storedCount} stored)"
-    } else {
-        "Dashboard upload failed: ${upload.error ?: "unknown error"}"
+    val text = when {
+        upload.offline ->
+            "Saved offline — no dashboard configured (${upload.sentCount} not uploaded)"
+        upload.succeeded ->
+            "Uploaded to dashboard (${upload.storedCount} stored)"
+        else ->
+            "Dashboard upload failed: ${upload.error ?: "unknown error"}"
+    }
+    // Offline isn't an error, but it isn't a success either — render it as a neutral warning so it
+    // can't be mistaken for a real upload (the bug that hid an hour of un-persisted syncs).
+    val color = when {
+        upload.offline -> MaterialTheme.colorScheme.tertiary
+        upload.succeeded -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.error
     }
     Text(
         text = text,
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Medium,
-        color = if (upload.succeeded) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.error,
+        color = color,
     )
 }
 
