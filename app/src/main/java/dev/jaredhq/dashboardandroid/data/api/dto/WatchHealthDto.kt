@@ -93,6 +93,11 @@ data class WatchSleepSessionDto(
     val score: Int? = null,
     val sleepEndHour: Int? = null,
     val sleepEndMinute: Int? = null,
+    val remMinutes: Int? = null,
+    val remCount: Int? = null,
+    val avgHeartRate: Int? = null,
+    val avgSpo2: Int? = null,
+    val avgRespiratoryRate: Int? = null,
 )
 
 @Serializable
@@ -235,6 +240,11 @@ private fun WatchSleepSession.toDto() = WatchSleepSessionDto(
     score = score,
     sleepEndHour = sleepEndHour,
     sleepEndMinute = sleepEndMinute,
+    remMinutes = remMinutes,
+    remCount = remCount,
+    avgHeartRate = avgHeartRate,
+    avgSpo2 = avgSpo2,
+    avgRespiratoryRate = avgRespiratoryRate,
 )
 
 private val WORKOUT_TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

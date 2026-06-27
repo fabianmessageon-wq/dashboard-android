@@ -102,6 +102,31 @@ class UploadingWatchHealthListenerTest {
     }
 
     @Test
+    fun offlineSinkIsNotReportedAsSuccessfulUpload() = runTest {
+        // No dashboard configured → the fake/offline client acks without persisting. The outcome
+        // must NOT read as a successful upload (the bug that hid an hour of un-persisted syncs).
+        val client = StubClient {
+            WatchHealthUploadResult(accepted = true, storedCount = 3, offline = true)
+        }
+        val outcomes = mutableListOf<WatchUploadOutcome>()
+        val listener = UploadingWatchHealthListener(
+            repository = repoOver(client),
+            scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
+            deviceId = "AA:BB:CC:DD:EE:FF",
+            onUploadOutcome = { outcomes += it },
+        )
+
+        listener.onSpo2Reading(spo2)
+        listener.onSyncComplete()
+        advanceUntilIdle()
+
+        val outcome = outcomes.single()
+        assertFalse(outcome.succeeded)
+        assertTrue(outcome.offline)
+        assertEquals(1, outcome.sentCount)
+    }
+
+    @Test
     fun completeReportsFailureWithErrorWhenUploadThrows() = runTest {
         val client = StubClient { throw ApiException(500, "server boom") }
         val outcomes = mutableListOf<WatchUploadOutcome>()

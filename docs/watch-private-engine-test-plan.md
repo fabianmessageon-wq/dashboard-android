@@ -232,3 +232,38 @@ Record results here:
 
 - [x] Release builds forbid cleartext HTTP dashboard origins while debug builds keep local-dev `http://10.0.2.2` support. Implemented with build-type `usesCleartextTraffic` manifest placeholders and a release-only `ApiClientFactory` rejection of `http://`.
 - [ ] Decide whether optional SDK-internal AGPS/Alexa/ephemeris code paths need active runtime blocking or whether documented non-use plus network-capture verification is enough for this private build.
+
+## Phase 2 — sync instrumentation + metric support matrix (2026-06-26)
+
+Added durable instrumentation so a real sync proves what the Active 4 Pro emits and what we drop:
+
+- `WatchSyncDiagnostics` — per-sync, counts-only tally of **every** `ISyncDataListener` callback,
+  including the previously-silent no-op sinks (GPS, body composition, second-by-second HR, noise,
+  swimming, ECG, emotion). Privacy-safe (no decoded values), so it logs in release too.
+- `WatchMetric` / `MetricConfidence` — the durable confidence ladder; pure Kotlin, unit-tested.
+- `IdoSdkWatchEngine` now logs, at connect: `function table (health flags): …`; at sync end:
+  `sync diagnostics: …`, `sync delivered-but-dropped: …`, and `metric confidence: …`.
+
+Verification run (debug build, SM-G991B / Android 14, fresh `installDebug`):
+
+- [x] `./gradlew testDebugUnitTest` — green (incl. new `WatchSyncDiagnosticsTest`, `WatchMetricSupportTest`).
+- [x] `./gradlew assembleDebug` — green.
+- [x] `./gradlew lintDebug` — green.
+- [x] Fresh `installDebug` + real Active 4 Pro sync — connect/bind/sync/upload OK, no crash.
+- [x] Function table + diagnostics + confidence lines captured; UI shows Activity/HRV/Body-energy/Stress.
+
+Result → [`watch-metric-support-matrix.md`](watch-metric-support-matrix.md). Headline findings:
+
+- Proven end-to-end (SHOWN_IN_UI): activity day, body energy, stress, HRV.
+- Function-table supported but not emitted in the synced window: workout, sleep, SpO₂, noise, swimming.
+- Not supported on this watch (flag false): temperature, blood pressure, GPS, emotion.
+- **New gap:** `heart_rate_second` (intraday HR) is delivered by the watch and currently dropped —
+  the next implementation slice (domain model + dashboard column + upload + UI).
+
+To re-capture on device:
+
+```bash
+adb logcat -c
+# connect + sync from the Watch screen, then:
+adb logcat -d | grep -E "function table \(health flags\)|sync diagnostics|delivered-but-dropped|metric confidence"
+```

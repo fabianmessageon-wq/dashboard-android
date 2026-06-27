@@ -47,7 +47,7 @@ data class WatchHeartRateDay(
     val limitMins: Int?,
 )
 
-/** A night's sleep with deep/light/awake breakdown and score. */
+/** A night's sleep with deep/light/awake/REM breakdown, score, and V3 averages. */
 data class WatchSleepSession(
     val date: String, // YYYY-MM-DD (wake date)
     val totalMinutes: Int?,
@@ -60,6 +60,12 @@ data class WatchSleepSession(
     val score: Int?,
     val sleepEndHour: Int?,
     val sleepEndMinute: Int?,
+    // V3-only richer fields; null on the v2 path (HealthSleep doesn't carry them).
+    val remMinutes: Int? = null,
+    val remCount: Int? = null,
+    val avgHeartRate: Int? = null,
+    val avgSpo2: Int? = null,
+    val avgRespiratoryRate: Int? = null,
 )
 
 /**
@@ -199,10 +205,17 @@ data class WatchHealthBatch(
             bloodPressureReadings.size + stressReadings.size
 }
 
-/** Server acknowledgement of a [WatchHealthBatch] upload. */
+/**
+ * Server acknowledgement of a [WatchHealthBatch] upload.
+ *
+ * [offline] is true when no real dashboard was contacted — the offline/fake client acknowledges
+ * locally without persisting anything (happens when no dashboard URL is configured). Callers must
+ * NOT report this as a successful upload.
+ */
 data class WatchHealthUploadResult(
     val accepted: Boolean,
     val storedCount: Int = 0,
+    val offline: Boolean = false,
 )
 
 /**
@@ -217,4 +230,6 @@ data class WatchUploadOutcome(
     val sentCount: Int,
     val storedCount: Int = 0,
     val error: String? = null,
+    /** True when nothing was actually persisted because no dashboard is configured (offline sink). */
+    val offline: Boolean = false,
 )

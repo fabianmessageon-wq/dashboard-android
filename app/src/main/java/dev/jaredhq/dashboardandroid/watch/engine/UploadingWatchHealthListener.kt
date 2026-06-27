@@ -156,13 +156,19 @@ class UploadingWatchHealthListener(
         scope.launch {
             repository.uploadWatchHealth(batch)
                 .onSuccess {
-                    Log.i(TAG, "uploaded ${batch.recordCount} records (stored=${it.storedCount})")
+                    if (it.offline) {
+                        Log.w(TAG, "no dashboard configured — ${batch.recordCount} records saved offline, NOT uploaded")
+                    } else {
+                        Log.i(TAG, "uploaded ${batch.recordCount} records (stored=${it.storedCount})")
+                    }
                     onUploadOutcome(
                         WatchUploadOutcome(
-                            succeeded = it.accepted,
+                            // Offline is not a real upload — don't report success.
+                            succeeded = it.accepted && !it.offline,
                             sentCount = batch.recordCount,
                             storedCount = it.storedCount,
                             error = if (it.accepted) null else "Dashboard rejected the upload.",
+                            offline = it.offline,
                         ),
                     )
                 }

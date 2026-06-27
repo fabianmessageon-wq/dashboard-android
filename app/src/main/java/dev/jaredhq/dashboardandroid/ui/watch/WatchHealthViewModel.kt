@@ -52,6 +52,8 @@ data class WatchUploadStatus(
     val sentCount: Int,
     val storedCount: Int,
     val error: String?,
+    /** True when nothing was persisted because no dashboard is configured (offline sink). */
+    val offline: Boolean = false,
 )
 
 /** A finished sync run's outcome, for the "Last sync" card. */
@@ -128,6 +130,7 @@ class WatchHealthViewModel(
                         sentCount = outcome.sentCount,
                         storedCount = outcome.storedCount,
                         error = outcome.error,
+                        offline = outcome.offline,
                     ),
                 ),
             )
