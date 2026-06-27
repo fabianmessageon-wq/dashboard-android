@@ -523,10 +523,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             // The sync stream can include empty/sentinel records (year 0, all-zero) — skip them.
             if (data == null || data.get_up_year == 0) return
             diagnostics.record(WatchSyncDiagnostics.SLEEP_V3, parentRecords = 1, mappedReadings = 1)
-            // Ground-truth capture for the W5/W6 sleep-field expansion: the toDomain() mapper drops
-            // rem_* and sleep_avg_* today, so log the raw richer fields here. DEBUG-gated, logcat-only
-            // (developer-only health data per CLAUDE.md — never uploaded model-facing). Remove once the
-            // domain model + dashboard schema carry these columns.
+            // Raw-SDK sleep ground-truth capture. The domain model + dashboard schema now DO carry
+            // rem_*/avg_* (toDomain() below maps them; landing in watch_sleep_sessions verified
+            // 2026-06-28), so this no longer fills a gap in toDomain(). It is kept deliberately, not
+            // removed: it logs the raw HealthSleepV3 fields at the SDK boundary and — together with
+            // the decoded `WatchHealthUpload: SLEEP` line — is our no-loss capture path, because the
+            // upload has no local retry (a failed POST drops the batch). DEBUG-gated, logcat-only
+            // (developer-only health data per CLAUDE.md — never uploaded model-facing).
             if (BuildConfig.DEBUG) {
                 Log.d(
                     TAG,
