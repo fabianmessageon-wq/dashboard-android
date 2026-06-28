@@ -36,9 +36,9 @@ upload/show but the watch never sends is never overstated.
 | Body energy | ✅ (HealthBodyPower) | ✅ `v3_body_power` | ✅ 251, then 33/295² | ✅ | ✅ | **SHOWN_IN_UI** | Done. Investigate zero-slot padding (295 items → 33 non-zero). |
 | Stress | ✅ (HealthPressure) | ✅ `ex_main3_v3_pressure` | ✅ 24, then 4/9 | ✅ | ✅ | **SHOWN_IN_UI** | Done. |
 | HRV | ✅ (HealthHRVdata) | ✅ `V3_support_hrv` | ✅ 1/6 | ✅ | ✅ | **SHOWN_IN_UI** | Done. |
-| Workout / sport | ✅ (HealthActivityV3) | ✅ `ex_table_main9_v3_sports` | ⬜ none yet³ | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Record a workout on the watch to confirm emission + units. |
+| Workout / sport | ✅ (HealthActivityV3) | ✅ `ex_table_main9_v3_sports` | ✅ 1 (2026-06-28)⁵ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-28 (`workout_v3(p=1,i=0,m=1)` → 201). |
 | Sleep | ✅ (HealthSleepV3) | ✅ `V3_support_scientific_sleep` | ⬜ none yet³ | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Sync after a night's sleep to confirm; surface REM (rem_mins). |
-| SpO₂ | ✅ (HealthSpO2) | ✅ `ex_main3_v3_spo2_data` | ⬜ none yet³ | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Confirm emission once an SpO₂ reading exists in the window. |
+| SpO₂ | ✅ (HealthSpO2) | ✅ `ex_main3_v3_spo2_data` | ✅ 1 (2026-06-28)⁵ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-28 (`spo2(p=1,i=4,m=1)`, percent=97 → 201). |
 | Heart-rate day | ✅ (HealthHeartRate, v2) | ✅ `heartRate` | ⬜ none (v2 path) | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Likely never fires (V3 watch). HR may live in `heart_rate_second` instead. |
 | Respiratory | ✅ (HealthRespiratoryRate) | — no flag | ⬜ none yet | ✅ | ✅ | SDK_MODEL_ONLY | Confirm emission; no capability flag to lean on. |
 | Intraday HR (`heart_rate_second`) | ✅ (HealthHeartRateSecond) | — no flag | ✅ **delivered, DROPPED**⁴ | ❌ | ❌ | EMITTED_ON_REAL_SYNC | **Deferred** — record carries no mappable timestamps (see §"Intraday HR investigation"). Needs a VeryFit capture before mapping. |
@@ -65,6 +65,10 @@ Notes:
 4. `heart_rate_second` is **delivered by the Active 4 Pro and currently dropped** — discovered only
    because Phase-2 instrumentation made the previously-silent no-op sinks observable. Investigated
    below; deferred (no mappable timestamps in the delivered record).
+5. **Verified 2026-06-28** (SM-G991B, debug build). After recording a workout + an SpO₂ reading on
+   the watch, a sync delivered `workout_v3(p=1,i=0,m=1)` and `spo2(p=1,i=4,m=1)` (SpO₂ percent=97);
+   both reached `metric confidence: …=SHOWN_IN_UI`, and the batch uploaded real (`--> POST
+   …/watch/health` → `<-- 201`, 569 stored). VeryFit was force-stopped and logcat captured first.
 
 ## Intraday HR investigation (2026-06-26)
 
@@ -91,9 +95,10 @@ instrumented (emitted count + a debug shape probe) and documented here.
 
 - **Instrumentation + verification: complete.** Every SDK callback is now tallied; a real sync logs
   a counts-only diagnostics summary, a delivered-but-dropped list, and a per-metric confidence line.
-- **Proven end-to-end (SHOWN_IN_UI):** activity day, body energy, stress, HRV.
-- **Capable but unverified (need on-watch activity):** workout, sleep, SpO₂ — sync after a workout /
-  a night's sleep / an SpO₂ reading to confirm emission; all already wired through upload + UI.
+- **Proven end-to-end (SHOWN_IN_UI):** activity day, body energy, stress, HRV, **workout (2026-06-28),
+  SpO₂ (2026-06-28)**.
+- **Capable but unverified (need on-watch activity):** sleep — sync after a night's sleep to confirm
+  emission; already wired through upload + UI. (Workout + SpO₂ confirmed 2026-06-28, see note 5.)
 - **Intraday HR:** emitted but **deferred** — unmappable without a VeryFit capture (above).
 
 Recommended next step: confirm the **capable-but-unverified** metrics (workout/sleep/SpO₂) by
