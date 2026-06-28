@@ -74,6 +74,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     /** Raw per-sync delivery tally (incl. callbacks we drop) for the Phase-2 support matrix. */
     private val diagnostics = WatchSyncDiagnostics()
 
+    // W7: the watch gates *display* of any pushed notice on a per-type "message notify state". Until
+    // that state is set to ALLOW for a type, the watch silently drops our V3MessageNotice/NewMessageInfo
+    // even though the SDK accepts the send. The stock VeryFit app pushes default ALLOW states on connect
+    // (RemindDataManager.sendDefaultNotificationState2Device → BLEManager.addMessageNotifyState(list,0,0)).
+    // We never sent config, so notices never displayed. Push ALLOW once per connected session. One-shot.
+    @Volatile
+    private var notifyStatesEnabled = false
+
     override fun init() {
         if (initialized) return
         synchronized(this) {
@@ -219,14 +227,55 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return false
         }
         return try {
-            // Mirror VeryFit's capability gate (MsgNotificationHelper.sendNotificationDevice): devices
-            // flagged ex_table_main10_v3_notify_msg take the V3 message-notice path; the rest take the
-            // newer NewMessageInfo path. Each enumeration has its own per-category type codes (see
-            // [v3TypeFor]/[newTypeFor]), so an SMS/call renders as such on the watch. The function
-            // table is fetched once per connected session (see [syncHealth]); if it hasn't arrived yet
-            // we fall back to the newer path (the common case).
+            // An incoming call uses the watch's dedicated call API (renders the native answer/reject
+            // screen), NOT the message path — this is how VeryFit does it
+            // (MsgNotificationHelper.sendCallReminder2DeviceNew → setIncomingCallInfo). Pair with
+            // [stopIncomingCall] when the call ends.
+            // NOTE (hardware-verified, Active 4 Pro): this watch is *also* bonded as a Bluetooth
+            // Hands-Free (HFP) device, so the wrist answer/reject is actually executed by Android's
+            // telephony stack over HFP — it never reaches [deviceControlCallBack] / the app's
+            // [WatchControlEvent] path (that path stays as a fallback for watches that deliver call
+            // control over the IDO GATT channel instead of HFP).
+            if (notification.category == WatchNotificationCategory.CALL) {
+                val callInfo = com.ido.ble.protocol.model.IncomingCallInfo().apply {
+                    name = notification.appName.ifBlank { " " }
+                    phoneNumber = ""
+                }
+                Log.i(TAG, "sendNotification (incoming call) len=${notification.body.length}")
+                BLEManager.setIncomingCallInfo(callInfo)
+                return true
+            }
+            // Mirror VeryFit's capability gate (MsgNotificationHelper.formNotificationAndSend2Device):
+            //  1. Watches flagged V3_support_set_v3_notify_add_app_name take the NEW NotificationPara
+            //     path (`isSupportV3Notify()` → sendNotification2DeviceV3). The Active 4 Pro is one of
+            //     these — its firmware *ignores* the legacy setV3MessageNotice, which is why mirroring
+            //     silently failed on hardware. The notice carries the app name in `items` itself, so we
+            //     don't need the full notice-app/icon DB push for the standard SMS/message types.
+            //  2. Otherwise: ex_table_main10_v3_notify_msg → legacy V3MessageNotice; else NewMessageInfo.
+            // The function table is fetched once per connected session (see [syncHealth]); if it hasn't
+            // arrived yet we fall back to the newer message path (the common case).
+            val useNotificationPara = cachedFunctionInfo?.V3_support_set_v3_notify_add_app_name == true
             val useOldV3 = cachedFunctionInfo?.ex_table_main10_v3_notify_msg == true
-            if (useOldV3) {
+            if (useNotificationPara) {
+                val para = com.ido.ble.protocol.model.NotificationPara().apply {
+                    notify_type = v3TypeFor(notification.category)
+                    contact = notification.appName
+                    msg_data = notification.body
+                    phone_number = ""
+                    evt_type = 1 // VeryFit sends evt_type=1 for an incoming/new notification
+                    // The app-name list the watch renders; one fallback entry mirrors VeryFit's
+                    // "no name list → default name" branch (language index 1, the app/sender name).
+                    items = listOf(
+                        com.ido.ble.protocol.model.NotificationPara.AppNames().apply {
+                            language = 1
+                            name = notification.appName
+                        },
+                    )
+                    app_items_len = items.size
+                }
+                Log.i(TAG, "sendNotification (NotificationPara) category=${notification.category} len=${notification.body.length}")
+                BLEManager.sendNotification(para)
+            } else if (useOldV3) {
                 @Suppress("DEPRECATION")
                 val notice = com.ido.ble.protocol.model.V3MessageNotice().apply {
                     evtType = v3TypeFor(notification.category)
@@ -260,6 +309,42 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "sendNotification failed", t)
             false
         }
+    }
+
+    override fun stopIncomingCall() {
+        if (!isConnected()) return
+        runCatching {
+            Log.i(TAG, "stopIncomingCall → setStopInComingCall")
+            BLEManager.setStopInComingCall()
+        }.onFailure { Log.w(TAG, "stopIncomingCall failed", it) }
+    }
+
+    /**
+     * Enable the watch's per-type message-notify state so it will actually *display* the notices we
+     * push (W7). Mirrors VeryFit's `RemindDataManager.sendDefaultNotificationState2Device`, which sends
+     * a list of [MessageNotifyState] with `notify_state = ALLOW` via `addMessageNotifyState(list, 0, 0)`
+     * on connect. Without it the watch silently drops every V3MessageNotice/NewMessageInfo even though
+     * the SDK accepts the send. Pushed once per connected session (after a sync, so it never interleaves
+     * with the order-sensitive data-pull commands) for the categories we mirror.
+     */
+    private fun enableMessageNotifyStates() {
+        if (notifyStatesEnabled || !isConnected()) return
+        runCatching {
+            val states = listOf(
+                WatchNotificationCategory.CALL,
+                WatchNotificationCategory.MISSED_CALL,
+                WatchNotificationCategory.SMS,
+                WatchNotificationCategory.GENERIC,
+            ).map { category ->
+                com.ido.ble.protocol.model.MessageNotifyState().apply {
+                    evt_type = v3TypeFor(category)
+                    notify_state = com.ido.ble.protocol.model.NotifyType.ALLOW
+                }
+            }
+            BLEManager.addMessageNotifyState(states, 0, 0)
+            notifyStatesEnabled = true
+            Log.i(TAG, "enabled message notify states (ALLOW) for ${states.size} categories")
+        }.onFailure { Log.w(TAG, "enableMessageNotifyStates failed", it) }
     }
 
     private fun startSync() {
@@ -386,6 +471,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             functionTableCached = false
             cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
+            notifyStatesEnabled = false
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
@@ -479,6 +565,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.i(TAG, "syncAllData onSuccess")
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
+            enableMessageNotifyStates()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
@@ -487,6 +574,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "syncAllData onFailed: $type")
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
+            enableMessageNotifyStates()
             listener?.onSyncFailed()
         }
     }
@@ -825,6 +913,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             .mapNotNull { m -> m.functionTableField?.let { "${m.diagnosticsKey}=${readFunctionFlag(it)}" } }
             .joinToString(", ")
         Log.i(TAG, "function table (health flags): $flags")
+        // The notification-send path this watch needs (see [sendNotification]); logged once per connect.
+        Log.i(
+            TAG,
+            "W7 notify path: v3_add_app_name=${readFunctionFlag("V3_support_set_v3_notify_add_app_name")}, " +
+                "ex_v3_notify_msg=${readFunctionFlag("ex_table_main10_v3_notify_msg")}",
+        )
     }
 
     /**

@@ -29,6 +29,11 @@ class WatchNotificationListenerService : NotificationListenerService() {
     // edits). Forward a given key at most once per [DEDUP_WINDOW_MS] so the watch isn't spammed.
     private val lastForwarded = ConcurrentHashMap<String, Long>()
 
+    // Keys of in-flight incoming-call notifications, so when one is removed (answered/ended/declined)
+    // we tell the watch to drop its incoming-call screen ([WatchEngine.stopIncomingCall]). A call is
+    // mirrored via the dedicated call API, not the message list, so it needs an explicit "ended".
+    private val callKeys = ConcurrentHashMap.newKeySet<String>()
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
         runCatching {
@@ -38,6 +43,11 @@ class WatchNotificationListenerService : NotificationListenerService() {
             val engine = ServiceLocator.watchEngine
             // On-demand connection model: only mirror when the watch is already linked.
             if (!engine.isConnected()) return
+
+            // Track a ringing call so its removal can clear the watch's call screen. (Done before the
+            // dedup gate: ring updates re-post the same key and we must not lose the key on a dedup
+            // skip.)
+            if (mapped.category == WatchNotificationCategory.CALL) callKeys.add(sbn.key)
 
             val now = System.currentTimeMillis()
             val previous = lastForwarded[sbn.key]
@@ -49,7 +59,15 @@ class WatchNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        sbn?.key?.let { lastForwarded.remove(it) }
+        val key = sbn?.key ?: return
+        lastForwarded.remove(key)
+        // An incoming call ended (answered/declined/missed) — drop the watch's call screen.
+        if (callKeys.remove(key)) {
+            runCatching {
+                ServiceLocator.init(applicationContext)
+                if (ServiceLocator.watchEngine.isConnected()) ServiceLocator.watchEngine.stopIncomingCall()
+            }.onFailure { Log.w(TAG, "stopIncomingCall mirror failed", it) }
+        }
     }
 
     /** Map a posted notification to a [WatchNotification], or null to skip it. */
