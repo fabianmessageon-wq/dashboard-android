@@ -166,6 +166,47 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         beginScan()
     }
 
+    // Liveness-reset connect watchdog. The SDK can leave us stuck in the SCANNING/CONNECTING zone
+    // with no terminal callback: observed once after a cold boot the link sat ~2 min at onConnecting
+    // (Classic-BT/HFP up, BLE/GATT connect never completing) and recovered only on a manual relaunch.
+    // The always-on WatchConnectionService.maintain() only retries on DISCONNECTED, so a state stuck
+    // at CONNECTING leaves the link silently down until the app is reopened.
+    //
+    // Crucially (hardware-verified): after a drop the SDK runs its OWN internal auto-reconnect —
+    // cycling onConnectStart/onScanFinished every ≤~35s and recovering itself when the watch returns —
+    // WITHOUT ever calling our connect()/beginScan(). A watchdog armed only at our beginScan would
+    // miss that path entirely (a 12-min watch-off window sat at CONNECTING the whole time and never
+    // armed it). So instead of a fixed timeout we (re)arm on EVERY connect-progress callback from
+    // either path (see [noteConnectProgress]); the watchdog fires only when progress goes *silent*
+    // for CONNECT_STALL_MS while still SCANNING/CONNECTING — the genuine wedge. Healthy retry cycling
+    // keeps resetting it, so it never aborts a connect that's still making progress. On a true wedge
+    // it tears down the half-open attempt and routes through the SAME retry budget as a GATT-133
+    // failure; once the link is up (onConnectSuccess) it's cleared (bind() afterwards is user-gated).
+    private val connectWatchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectWatchdogRunnable = Runnable {
+        val state = _connectionState.value
+        if (targetMac == null ||
+            (state != WatchEngineConnectionState.SCANNING && state != WatchEngineConnectionState.CONNECTING)
+        ) {
+            return@Runnable // attempt already settled (connected/bound/disconnected) — nothing to do
+        }
+        Log.w(TAG, "connect watchdog: no progress for ${CONNECT_STALL_MS}ms at $state — aborting + retrying")
+        runCatching { BLEManager.stopScanDevices() }
+        runCatching { BLEManager.disConnect() }
+        handleConnectAttemptFailed("connect stall watchdog (silent ${CONNECT_STALL_MS}ms at $state)")
+    }
+
+    /**
+     * Mark connect progress and (re)arm the stall watchdog. Called from every connect-progress
+     * callback regardless of which path (our connect()/beginScan or the SDK's auto-reconnect) drives
+     * it; each call pushes the wedge deadline CONNECT_STALL_MS further out, so the watchdog fires
+     * only on true silence.
+     */
+    private fun noteConnectProgress() {
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
+        connectWatchdogHandler.postDelayed(connectWatchdogRunnable, CONNECT_STALL_MS)
+    }
+
     override fun connect(macAddress: String) {
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
@@ -178,9 +219,36 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     /** Start (or restart, for a GATT-133 retry) the scan→connect flow toward [targetMac]. */
     private fun beginScan() {
         functionTableCached = false
+        noteConnectProgress() // arm/refresh the stall watchdog for this attempt
         Log.i(TAG, "connect($targetMac) → scanning to find + bind")
         _connectionState.value = WatchEngineConnectionState.SCANNING
         BLEManager.startScanDevices()
+    }
+
+    /**
+     * A connect attempt failed to reach a live link — either the SDK reported [onConnectFailed]
+     * (typically a transient GATT-133 first-connect hiccup) or our connect watchdog tripped on a
+     * wedged/never-found attempt. Both share one bounded retry budget: re-scan up to
+     * [MAX_CONNECT_RETRIES] times with a short backoff, then surface a clean DISCONNECTED so callers
+     * (UI / worker / always-on service) see a terminal state and can decide whether to retry. Always
+     * clears the watchdog first so a queued timeout can't fire after we've already handled the failure.
+     */
+    private fun handleConnectAttemptFailed(context: String) {
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
+        if (targetMac != null && connectAttempts < MAX_CONNECT_RETRIES) {
+            connectAttempts++
+            Log.w(
+                TAG,
+                "$context — retry $connectAttempts/$MAX_CONNECT_RETRIES in ${CONNECT_RETRY_DELAY_MS}ms",
+            )
+            connectRetryHandler.removeCallbacks(connectRetryRunnable)
+            connectRetryHandler.postDelayed(connectRetryRunnable, CONNECT_RETRY_DELAY_MS)
+            return
+        }
+        Log.w(TAG, "$context — giving up after ${connectAttempts + 1} attempts")
+        connectAttempts = 0
+        _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        listener?.onSyncFailed()
     }
 
     override fun disconnect() {
@@ -189,6 +257,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         pendingSyncAfterFunctionTable = false
         connectAttempts = 0
         connectRetryHandler.removeCallbacks(connectRetryRunnable)
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
         _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
     }
@@ -388,9 +457,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     // ── Scan → connect → bind lifecycle ──────────────────────────────────────────────
 
     private val scanCallBack = object : ScanCallBack.ICallBack {
-        override fun onStart() { Log.i(TAG, "scan started (target=$targetMac)") }
-        override fun onScanFinished() { Log.i(TAG, "scan finished") }
+        override fun onStart() { noteConnectProgress(); Log.i(TAG, "scan started (target=$targetMac)") }
+        override fun onScanFinished() { noteConnectProgress(); Log.i(TAG, "scan finished") }
         override fun onFindDevice(device: BLEDevice?) {
+            noteConnectProgress()
             val addr = device?.mDeviceAddress ?: return
             Log.d(TAG, "found '${device.mDeviceName}' $addr rssi=${device.mRssi}")
             if (addr.equals(targetMac, ignoreCase = true)) {
@@ -404,17 +474,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private val connectCallBack = object : ConnectCallBack.ICallBack {
         override fun onConnectStart(mac: String?) {
+            noteConnectProgress()
             Log.i(TAG, "onConnectStart $mac")
             _connectionState.value = WatchEngineConnectionState.CONNECTING
         }
-        override fun onConnecting(mac: String?) { Log.i(TAG, "onConnecting $mac") }
-        override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
+        override fun onConnecting(mac: String?) { noteConnectProgress(); Log.i(TAG, "onConnecting $mac") }
+        override fun onRetry(times: Int, mac: String?) { noteConnectProgress(); Log.i(TAG, "onRetry $times $mac") }
 
         override fun onConnectSuccess(mac: String?) {
             // Link is up — clear the GATT-133 retry budget so any *later* transient drop gets a
-            // fresh set of attempts of its own.
+            // fresh set of attempts of its own, and disarm the connect watchdog (past the wedge window).
             connectAttempts = 0
             connectRetryHandler.removeCallbacks(connectRetryRunnable)
+            connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             val bound = runCatching { BLEManager.isBind() }.getOrDefault(false)
             Log.i(TAG, "onConnectSuccess $mac bound=$bound")
             if (!bound) {
@@ -446,24 +518,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
-            // GATT-133 mitigation: first-connect to this family often fails once transiently. Retry
-            // the scan→connect up to MAX_CONNECT_RETRIES times with a short backoff before surfacing
-            // a failure to the UI/worker, instead of dropping the whole sync on the first hiccup.
-            if (targetMac != null && connectAttempts < MAX_CONNECT_RETRIES) {
-                connectAttempts++
-                Log.w(
-                    TAG,
-                    "onConnectFailed reason=$reason mac=$mac — retry $connectAttempts/$MAX_CONNECT_RETRIES " +
-                        "in ${CONNECT_RETRY_DELAY_MS}ms (transient GATT-133 mitigation)",
-                )
-                connectRetryHandler.removeCallbacks(connectRetryRunnable)
-                connectRetryHandler.postDelayed(connectRetryRunnable, CONNECT_RETRY_DELAY_MS)
-                return
-            }
-            Log.w(TAG, "onConnectFailed reason=$reason mac=$mac — giving up after ${connectAttempts + 1} attempts")
-            connectAttempts = 0
-            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
-            listener?.onSyncFailed()
+            handleConnectAttemptFailed("onConnectFailed reason=$reason mac=$mac")
         }
 
         override fun onConnectBreak(mac: String?) {
@@ -472,6 +527,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
             notifyStatesEnabled = false
+            // The link is down for good; a wedge-watchdog from this attempt no longer applies.
+            connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
@@ -1081,6 +1138,17 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
         const val MAX_CONNECT_RETRIES = 2
         const val CONNECT_RETRY_DELAY_MS = 2_000L
+
+        /**
+         * How long the connect may go with NO progress callback while still SCANNING/CONNECTING
+         * before the stall watchdog declares it wedged and forces a teardown+retry. It's a *silence*
+         * window, reset on every progress callback (see [noteConnectProgress]) — so it must sit above
+         * the SDK's healthy retry cadence: hardware showed onConnectStart/onScanFinished landing every
+         * ≤~35s during a watch-off auto-reconnect, so 90s gives ~2.5× margin and only a genuine
+         * (callback-silent) wedge trips it. A normal connect reaches onConnectSuccess in seconds and
+         * clears the watchdog long before this; bind() happens afterwards and is outside the window.
+         */
+        const val CONNECT_STALL_MS = 90_000L
 
         /** Category → NewMessageInfo type (modern path). No incoming-call type exists here, so a live
          *  CALL falls back to GENERIC and relies on the body text ("Incoming call · …"). */
