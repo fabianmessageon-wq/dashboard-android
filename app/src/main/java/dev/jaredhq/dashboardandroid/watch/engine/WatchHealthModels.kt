@@ -145,6 +145,17 @@ data class WatchStressReading(
 )
 
 /**
+ * A single intraday heart-rate sample (bpm) from the V3 `HealthHeartRateSecond` series — the
+ * Active 4 Pro's continuous HR (the v2 daily-HR summary path never fires on this device). Same
+ * point-metric shape as the others: one [recordedAt] wall-clock per sample. Lands in the dashboard
+ * `watch_heart_rate_readings` table.
+ */
+data class WatchHeartRateReading(
+    val recordedAt: String, // YYYY-MM-DD HH:MM:SS
+    val bpm: Int,
+)
+
+/**
  * Listener for decoded health data emitted by a [WatchEngine] during a sync.
  *
  * Methods fire on the SDK's callback thread (the IDO SDK marshals to the UI thread); the
@@ -166,6 +177,7 @@ interface WatchHealthListener {
     fun onBodyEnergyReading(reading: WatchBodyEnergyReading) {}
     fun onBloodPressureReading(reading: WatchBloodPressureReading) {}
     fun onStressReading(reading: WatchStressReading) {}
+    fun onHeartRateReading(reading: WatchHeartRateReading) {}
 
     fun onSyncProgress(percent: Int) {}
     fun onSyncComplete() {}
@@ -189,6 +201,7 @@ data class WatchHealthBatch(
     val bodyEnergyReadings: List<WatchBodyEnergyReading> = emptyList(),
     val bloodPressureReadings: List<WatchBloodPressureReading> = emptyList(),
     val stressReadings: List<WatchStressReading> = emptyList(),
+    val heartRateReadings: List<WatchHeartRateReading> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = activityDays.isEmpty() && heartRateDays.isEmpty() &&
@@ -196,13 +209,13 @@ data class WatchHealthBatch(
             spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
             respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
             bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
-            stressReadings.isEmpty()
+            stressReadings.isEmpty() && heartRateReadings.isEmpty()
 
     val recordCount: Int
         get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size +
             spo2Readings.size + hrvReadings.size + respiratoryReadings.size +
             temperatureReadings.size + bodyEnergyReadings.size +
-            bloodPressureReadings.size + stressReadings.size
+            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size
 }
 
 /**

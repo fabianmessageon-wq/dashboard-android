@@ -44,6 +44,7 @@ class UploadingWatchHealthListener(
     private val bodyEnergyReadings = mutableListOf<WatchBodyEnergyReading>()
     private val bloodPressureReadings = mutableListOf<WatchBloodPressureReading>()
     private val stressReadings = mutableListOf<WatchStressReading>()
+    private val heartRateReadings = mutableListOf<WatchHeartRateReading>()
 
     override fun onActivityDay(day: WatchActivityDay) {
         logPrivateRecord("ACTIVITY", day)
@@ -100,6 +101,11 @@ class UploadingWatchHealthListener(
         synchronized(lock) { stressReadings += reading }
     }
 
+    override fun onHeartRateReading(reading: WatchHeartRateReading) {
+        logPrivateRecord("HEART_RATE_SECOND", reading)
+        synchronized(lock) { heartRateReadings += reading }
+    }
+
     override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
 
     override fun onSyncComplete() {
@@ -121,7 +127,7 @@ class UploadingWatchHealthListener(
                 spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
                 respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
                 bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
-                stressReadings.isEmpty()
+                stressReadings.isEmpty() && heartRateReadings.isEmpty()
             ) {
                 return
             }
@@ -138,6 +144,7 @@ class UploadingWatchHealthListener(
                 bodyEnergyReadings = bodyEnergyReadings.toList(),
                 bloodPressureReadings = bloodPressureReadings.toList(),
                 stressReadings = stressReadings.toList(),
+                heartRateReadings = heartRateReadings.toList(),
             ).also {
                 activityDays.clear()
                 heartRateDays.clear()
@@ -150,6 +157,7 @@ class UploadingWatchHealthListener(
                 bodyEnergyReadings.clear()
                 bloodPressureReadings.clear()
                 stressReadings.clear()
+                heartRateReadings.clear()
             }
         }
 

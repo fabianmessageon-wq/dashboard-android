@@ -891,11 +891,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         // V3 "heart rate second" record carries the Active 4 Pro's intraday HR (the v2 daily-HR path
-        // never fires here). silentHR reads 0; the real data is the items[] series of bare HR values
-        // with no per-sample time. Before mapping it (would need a new point metric + dashboard
-        // column), confirm the sample interval. Probe logs date/startTime/count + first/last values
-        // and any hr_data high/low entries (those DO carry hour:minute) so the spacing can be pinned
-        // from real evidence. Debug-gated (the values are decoded health data). Mapping deferred.
+        // never fires here). The full downstream pipeline IS wired — domain [WatchHeartRateReading],
+        // [WatchHealthListener.onHeartRateReading], the uploader buffer, [WatchHeartRateReadingDto],
+        // the dashboard `watch_heart_rate_readings` table + route, and the Watch-screen count — so
+        // turning this on is just emitting one reading per item below.
+        //
+        // The ONE missing piece is the per-item wall-clock timestamp. Each [HealthHeartRateSecondItem]
+        // carries `heartRateVal` AND an `offset` (the field the old probe never logged); the parent
+        // has `startTime` (observed 0), a `five_min_data` list, and `hr_data` high/low entries that DO
+        // carry hour:minute. The mapping is almost certainly
+        //   recordedAt = midnight(date) + (startTime + offset) * <unit> seconds   (unit = 60? 300?)
+        // mirroring the other point metrics — but the offset UNIT and whether startTime participates
+        // must be confirmed against a real probe (offsetRange / stepHisto / hr_data alignment) before
+        // we emit, NOT guessed (a wrong unit silently mis-times every sample). The enhanced probe
+        // below logs exactly that. Once a real `heartRateSecond probe:` line confirms the step, add:
+        //   items.forEach { if (it.heartRateVal in 1..250) runCatching {
+        //       WatchTime.localDateTime(year, month, day, (startTime + it.offset) * UNIT)
+        //   }.onSuccess { ts -> listener?.onHeartRateReading(WatchHeartRateReading(ts, it.heartRateVal)); mapped++ } }
+        // and record mappedReadings = mapped. Debug-gated (decoded health data). Mapping deferred.
         override fun onGetHealthHeartRateSecondData(
             data: com.ido.ble.data.manage.database.HealthHeartRateSecond?,
             isLast: Boolean,
@@ -904,18 +917,35 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             val itemCount = data.items?.size ?: 0
             diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1, itemSamples = itemCount)
             if (BuildConfig.DEBUG) {
-                val vals = data.items?.map { it.heartRateVal } ?: emptyList()
+                val items = data.items ?: emptyList()
+                val vals = items.map { it.heartRateVal }
+                val offsets = items.map { it.offset }
                 val nonZero = vals.count { it > 0 }
                 val firstNonZero = vals.indexOfFirst { it > 0 }
                 val lastNonZero = vals.indexOfLast { it > 0 }
-                val hrTimes = data.hr_data?.take(4)?.map { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
+                // Per-item offset is the field never logged before — the key to the timestamp model.
+                // Log head/tail as offset=hr pairs, the offset range, and the dominant offset step.
+                val head = items.take(6).joinToString(",") { "${it.offset}=${it.heartRateVal}" }
+                val tail = items.takeLast(6).joinToString(",") { "${it.offset}=${it.heartRateVal}" }
+                val steps = offsets.zipWithNext { a, b -> b - a }
+                val stepHisto = steps.groupingBy { it }.eachCount().entries
+                    .sortedByDescending { it.value }.take(4).joinToString(",") { "${it.key}x${it.value}" }
+                val fiveMin = data.five_min_data ?: emptyList()
+                val fiveHead = fiveMin.take(6).joinToString(",")
+                val intervals = data.hrInterval?.take(4)?.joinToString(",") { "m${it.minute}/t${it.threshold}" }
+                // hr_data high/low entries DO carry wall-clock hour:minute — the ground truth to align
+                // the offset→time mapping against. Log all of them (typically a handful).
+                val hrTimes = data.hr_data?.joinToString(",") { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
                 Log.d(
                     TAG,
                     "heartRateSecond probe: date=${WatchTime.ymd(data.year, data.month, data.day)} " +
                         "startTime=${data.startTime} items=$itemCount nonZero=$nonZero " +
                         "firstNZidx=$firstNonZero lastNZidx=$lastNonZero " +
-                        "fiveMin=${data.five_min_data?.size ?: 0} hrDataCount=${data.hr_data_count} " +
-                        "silentHR=${data.silentHR} hrData=$hrTimes",
+                        "offsetRange=[${offsets.minOrNull()}..${offsets.maxOrNull()}] stepHisto=[$stepHisto] " +
+                        "fiveMin=${fiveMin.size}(avg=${data.five_min_avg_data},max=${data.five_min_max_data},min=${data.five_min_min_data}) fiveHead=[$fiveHead] " +
+                        "hrInterval=${data.hrInterval?.size ?: 0}[$intervals] hrDataCount=${data.hr_data_count} " +
+                        "silentHR=${data.silentHR}\n" +
+                        "  itemsHead=[$head]\n  itemsTail=[$tail]\n  hrData=[$hrTimes]",
                 )
             }
         }
@@ -1123,6 +1153,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { logPrivateRecord("BODY_ENERGY", reading) }
         override fun onBloodPressureReading(reading: WatchBloodPressureReading) { logPrivateRecord("BLOOD_PRESSURE", reading) }
         override fun onStressReading(reading: WatchStressReading) { logPrivateRecord("STRESS", reading) }
+        override fun onHeartRateReading(reading: WatchHeartRateReading) { logPrivateRecord("HEART_RATE_SECOND", reading) }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }

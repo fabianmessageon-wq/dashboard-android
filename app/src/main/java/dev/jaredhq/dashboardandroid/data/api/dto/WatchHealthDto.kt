@@ -6,6 +6,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
@@ -44,6 +45,7 @@ data class WatchHealthUploadDto(
     val bodyEnergyReadings: List<WatchBodyEnergyReadingDto> = emptyList(),
     val bloodPressureReadings: List<WatchBloodPressureReadingDto> = emptyList(),
     val stressReadings: List<WatchStressReadingDto> = emptyList(),
+    val heartRateReadings: List<WatchHeartRateReadingDto> = emptyList(),
 )
 
 @Serializable
@@ -169,6 +171,13 @@ data class WatchStressReadingDto(
     val stressScore: Int,
 )
 
+@Serializable
+data class WatchHeartRateReadingDto(
+    val date: String,
+    val recordedAt: Long,
+    val bpm: Int,
+)
+
 /**
  * Server acknowledgement. Defensively defaulted like the other widget DTOs so a contract skew (or
  * an empty 2xx body) degrades to "accepted" rather than failing the sync.
@@ -194,6 +203,7 @@ fun WatchHealthBatch.toDto(): WatchHealthUploadDto = WatchHealthUploadDto(
     bodyEnergyReadings = bodyEnergyReadings.map { it.toDto() },
     bloodPressureReadings = bloodPressureReadings.map { it.toDto() },
     stressReadings = stressReadings.map { it.toDto() },
+    heartRateReadings = heartRateReadings.map { it.toDto() },
 )
 
 private fun WatchActivityDay.toDto() = WatchActivityDayDto(
@@ -303,6 +313,12 @@ private fun WatchStressReading.toDto() = WatchStressReadingDto(
     date = recordedAt.take(10),
     recordedAt = localWallClockEpochSeconds(recordedAt),
     stressScore = stressScore,
+)
+
+private fun WatchHeartRateReading.toDto() = WatchHeartRateReadingDto(
+    date = recordedAt.take(10),
+    recordedAt = localWallClockEpochSeconds(recordedAt),
+    bpm = bpm,
 )
 
 /**
