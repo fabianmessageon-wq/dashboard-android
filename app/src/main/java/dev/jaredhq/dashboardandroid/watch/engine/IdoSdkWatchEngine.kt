@@ -148,12 +148,29 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     @Volatile
     private var pendingSyncAfterFunctionTable = false
 
+    // First-connect to this IDO/SiFli family commonly fails once with GATT status 133 — a transient
+    // Android stack hiccup, not a real "watch unreachable". Retry the scan→connect a bounded number
+    // of times before giving up. Reset on a user-driven connect and on a successful link.
+    private var connectAttempts = 0
+    private val connectRetryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectRetryRunnable = Runnable {
+        if (targetMac == null) return@Runnable
+        beginScan()
+    }
+
     override fun connect(macAddress: String) {
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
         targetMac = macAddress.uppercase()
+        connectAttempts = 0
+        connectRetryHandler.removeCallbacks(connectRetryRunnable)
+        beginScan()
+    }
+
+    /** Start (or restart, for a GATT-133 retry) the scan→connect flow toward [targetMac]. */
+    private fun beginScan() {
         functionTableCached = false
-        Log.i(TAG, "connect($macAddress) → scanning to find + bind")
+        Log.i(TAG, "connect($targetMac) → scanning to find + bind")
         _connectionState.value = WatchEngineConnectionState.SCANNING
         BLEManager.startScanDevices()
     }
@@ -162,6 +179,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         functionTableCached = false
         cachedFunctionInfo = null
         pendingSyncAfterFunctionTable = false
+        connectAttempts = 0
+        connectRetryHandler.removeCallbacks(connectRetryRunnable)
         _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
     }
@@ -307,6 +326,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
 
         override fun onConnectSuccess(mac: String?) {
+            // Link is up — clear the GATT-133 retry budget so any *later* transient drop gets a
+            // fresh set of attempts of its own.
+            connectAttempts = 0
+            connectRetryHandler.removeCallbacks(connectRetryRunnable)
             val bound = runCatching { BLEManager.isBind() }.getOrDefault(false)
             Log.i(TAG, "onConnectSuccess $mac bound=$bound")
             if (!bound) {
@@ -338,7 +361,22 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
-            Log.w(TAG, "onConnectFailed reason=$reason mac=$mac")
+            // GATT-133 mitigation: first-connect to this family often fails once transiently. Retry
+            // the scan→connect up to MAX_CONNECT_RETRIES times with a short backoff before surfacing
+            // a failure to the UI/worker, instead of dropping the whole sync on the first hiccup.
+            if (targetMac != null && connectAttempts < MAX_CONNECT_RETRIES) {
+                connectAttempts++
+                Log.w(
+                    TAG,
+                    "onConnectFailed reason=$reason mac=$mac — retry $connectAttempts/$MAX_CONNECT_RETRIES " +
+                        "in ${CONNECT_RETRY_DELAY_MS}ms (transient GATT-133 mitigation)",
+                )
+                connectRetryHandler.removeCallbacks(connectRetryRunnable)
+                connectRetryHandler.postDelayed(connectRetryRunnable, CONNECT_RETRY_DELAY_MS)
+                return
+            }
+            Log.w(TAG, "onConnectFailed reason=$reason mac=$mac — giving up after ${connectAttempts + 1} attempts")
+            connectAttempts = 0
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
             listener?.onSyncFailed()
         }
@@ -945,6 +983,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private companion object {
         const val TAG = "IdoSdkWatchEngine"
+
+        /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
+        const val MAX_CONNECT_RETRIES = 2
+        const val CONNECT_RETRY_DELAY_MS = 2_000L
 
         /** Category → NewMessageInfo type (modern path). No incoming-call type exists here, so a live
          *  CALL falls back to GENERIC and relies on the body text ("Incoming call · …"). */

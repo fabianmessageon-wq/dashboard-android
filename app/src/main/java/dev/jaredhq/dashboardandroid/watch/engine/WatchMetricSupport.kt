@@ -137,6 +137,21 @@ enum class WatchMetric(
         notes = "Dropped: categorical mood code, not a 0–100 score.",
     );
 
+    // ── Diagnostics keys deliberately absent from this enum ────────────────────────────
+    // [WatchSyncDiagnostics] tallies a few keys that intentionally have no WatchMetric entry. They
+    // are recorded only so the per-sync "what did the watch send" line is complete; they are not
+    // metrics on the confidence ladder, so the support matrix must not list (or double-count) them:
+    //
+    //  • The legacy *_V2 callbacks — ACTIVITY_DAY_V2, SLEEP_V2, SPORT_V2, BLOOD_PRESSURE_V2, GPS_V2 —
+    //    are the v2 SDK delivery paths superseded on this V3 watch by ACTIVITY_DAY / SLEEP / WORKOUT /
+    //    BLOOD_PRESSURE / GPS above. Giving each a parallel WatchMetric would double-count one physical
+    //    metric in the matrix, so the V3 entry is the single source of truth and the v2 key is tallied
+    //    in diagnostics only (to prove the v2 path stays silent). The one v2 key that *is* surfaced —
+    //    HEART_RATE_DAY_V2 (used by HEART_RATE_DAY) — is the exception, because there is no V3
+    //    daily-HR callback to represent it.
+    //  • DRINK_PLAN is a hydration-reminder *config echo*, not a health measurement — never uploaded
+    //    or shown, with no place on the SDK_MODEL_ONLY→SHOWN_IN_UI ladder.
+
     /**
      * Highest confidence proven for this metric, given runtime evidence:
      *

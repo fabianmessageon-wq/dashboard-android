@@ -1,5 +1,17 @@
 # Private Phase 3 — activity summary decode (kickoff prompt)
 
+> ## ⚠ Superseded 2026-06-28 — kept as reference only (read [ADR 0001](../adr/0001-vendor-ido-sdk.md))
+>
+> This clean-room kickoff is **not the active path**. The private build now decodes activity (and
+> every other health metric) through the **vendored IDO/VeryFit SDK** behind `IdoSdkWatchEngine`
+> (ADR 0001), which delivers already-decoded `HealthSportV3` / `HealthActivityV3` records — see the
+> [metric support matrix](../watch-metric-support-matrix.md) (activity day is `SHOWN_IN_UI`). The
+> clean-room code this prompt builds on (`ble/WatchActivityReassembler.kt`, `WatchGattCallback`,
+> `WatchBleManager`, `WatchProtocol`) has been **removed from the tree** along with the old `ble/`
+> package; the `33 DA AD` buffer-offset decode is therefore obsolete for the private build. This doc
+> is retained only as the **clean-room-later playbook** should a future clean-room `WatchEngine` be
+> reintroduced behind the interface (ADR 0001 reserves that option). Do not start Phase 3 as written.
+
 > Paste this into a fresh Claude Code session in `dashboard-android` to start Phase 3.
 > It is self-contained; read the linked files before changing code.
 

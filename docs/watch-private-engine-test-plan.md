@@ -72,23 +72,23 @@ UI gaps fixed:
 
 Local JVM (pure, no device):
 
-- [ ] `CompositeWatchHealthListenerTest`: added source coverage that fans **every** callback — including `onBloodPressureReading` and `onStressReading` — out to all delegates, keeps later delegates alive after an exception, and resolves delegates per callback. Pending Gradle execution.
-- [ ] `WatchHealthViewModelTest`: added source coverage — BP + stress callbacks increment
+- [x] `CompositeWatchHealthListenerTest`: added source coverage that fans **every** callback — including `onBloodPressureReading` and `onStressReading` — out to all delegates, keeps later delegates alive after an exception, and resolves delegates per callback. **Executed green 2026-06-28** (`testDebugUnitTest`).
+- [x] `WatchHealthViewModelTest`: added source coverage — BP + stress callbacks increment
       `WatchSyncCounts.bloodPressure`/`.stress` and `total`; a success/failure `WatchUploadOutcome`
       attaches to `lastSync.upload` with the right fields; an outcome arriving before any `lastSync`
-      is ignored without crashing; `onCleared` unregisters the upload listener. Pending Gradle execution.
-- [ ] `UploadingWatchHealthListenerTest`: added source coverage — `onSyncComplete` flushes one batch
+      is ignored without crashing; `onCleared` unregisters the upload listener. **Executed green 2026-06-28.**
+- [x] `UploadingWatchHealthListenerTest`: added source coverage — `onSyncComplete` flushes one batch
       and reports `onUploadOutcome(succeeded=true, sentCount, storedCount)` on a successful repo upload
       (batch includes BP + stress), reports `succeeded=false`/`error` when the upload throws, no-ops on
       an empty sync, and still flushes buffered records on `onSyncFailed` (benign end-of-sync). Faked
       via a stub `DashboardApiClient` over a real `DashboardRepository`; no production seam added.
-      Pending Gradle execution.
+      **Executed green 2026-06-28.**
 - [ ] W7 notification mirror map/dedup (`WatchNotificationListenerService`): **no JVM test added** —
       logic is bound to Android framework types (`StatusBarNotification`, `Notification.extras`,
       `Telephony`, `PackageManager`) with no pure seam; the documented answer/reject control-flag
       limitation lives in the SDK-coupled `IdoSdkWatchEngine`. Testing would need Robolectric (a new
       framework, disallowed) or a W7-path refactor (out of scope). Deferred to instrumented/hardware.
-- [ ] `BaseUrlNormalizationTest`: added common JVM coverage for local-dev `http://` allowed when cleartext is explicitly enabled and rejected when disabled, via a pure `allowCleartext` policy seam. Pending Gradle execution.
+- [x] `BaseUrlNormalizationTest`: added common JVM coverage for local-dev `http://` allowed when cleartext is explicitly enabled and rejected when disabled, via a pure `allowCleartext` policy seam. **Executed green 2026-06-28.**
 - [ ] `IdoSdkWatchEngine.buildInitParam`: SDK DB persistence remains disabled (`isSaveDeviceDataToDB=false`), SDK SP string encryption remains enabled, and sync callbacks still deliver records to upload after a fresh install/rebind.
 
 ## Lane D — W7 notification/call-control review findings (2026-06-26)
@@ -171,9 +171,9 @@ cd /home/apolytus/workspace/worktrees/phone-integration-refinement/dashboard-and
 
 Record results here before final handoff:
 
-- [ ] `./gradlew testDebugUnitTest`:
-- [ ] `./gradlew assembleDebug`:
-- [ ] `./gradlew lintDebug`:
+- [x] `./gradlew testDebugUnitTest`: **green 2026-06-28** — 89 tests, 0 failures, 0 skipped (JBR 21, Windows). Includes all four Lane-C JVM tests above + `WatchMetricSupportTest` / `WatchSyncDiagnosticsTest`.
+- [x] `./gradlew assembleDebug`: **green 2026-06-28** — debug APK built (only warning: pre-existing `setV3MessageNotice` deprecation).
+- [x] `./gradlew lintDebug`: **green 2026-06-28** — no errors.
 
 ## Deferred dashboard commands
 
