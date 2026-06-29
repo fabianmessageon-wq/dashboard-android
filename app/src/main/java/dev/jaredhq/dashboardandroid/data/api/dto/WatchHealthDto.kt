@@ -85,6 +85,9 @@ data class WatchHeartRateDayDto(
 @Serializable
 data class WatchSleepSessionDto(
     val date: String,
+    /** Epoch seconds of sleep onset (fall-asleep). Lets the server keep naps + the main night that
+     *  share a wake date as distinct rows instead of upsert-clobbering one with the other. */
+    val startedAt: Long? = null,
     val totalMinutes: Int? = null,
     val deepMinutes: Int? = null,
     val lightMinutes: Int? = null,
@@ -240,6 +243,7 @@ private fun WatchHeartRateDay.toDto() = WatchHeartRateDayDto(
 
 private fun WatchSleepSession.toDto() = WatchSleepSessionDto(
     date = date,
+    startedAt = startDateTime?.let { localWallClockEpochSeconds(it) },
     totalMinutes = totalMinutes,
     deepMinutes = deepMinutes,
     lightMinutes = lightMinutes,

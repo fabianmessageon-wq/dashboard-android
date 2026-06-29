@@ -1085,6 +1085,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun HealthSleep.toDomain() = WatchSleepSession(
         date = WatchTime.ymd(year, month, day),
+        // v2 HealthSleep carries no fall-asleep time and these devices don't report naps (one night
+        // per date), so midnight-of-wake-date is a stable, idempotent dedup key for the upsert.
+        startDateTime = WatchTime.ymdhms(year, month, day, 0, 0, 0),
         totalMinutes = totalSleepMinutes,
         deepMinutes = deepSleepMinutes,
         lightMinutes = lightSleepMinutes,
@@ -1102,6 +1105,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private fun HealthSleepV3.toDomain() = WatchSleepSession(
         // V3 keys the night by wake-up ("get up") time.
         date = WatchTime.ymd(get_up_year, get_up_month, get_up_day),
+        // Real sleep onset — the discriminator that keeps a nap and the main night (same wake date)
+        // as separate rows server-side. 0-year is the SDK's empty sentinel → leave null.
+        startDateTime = if (fall_asleep_year == 0) {
+            null
+        } else {
+            WatchTime.ymdhms(
+                fall_asleep_year, fall_asleep_month, fall_asleep_day,
+                fall_asleep_hour, fall_asleep_minte, 0,
+            )
+        },
         totalMinutes = total_sleep_time_mins,
         deepMinutes = deep_mins,
         lightMinutes = light_mins,
