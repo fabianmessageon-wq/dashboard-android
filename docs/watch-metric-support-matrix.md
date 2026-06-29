@@ -41,7 +41,7 @@ upload/show but the watch never sends is never overstated.
 | SpO₂ | ✅ (HealthSpO2) | ✅ `ex_main3_v3_spo2_data` | ✅ 1 (2026-06-28)⁵ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-28 (`spo2(p=1,i=4,m=1)`, percent=97 → 201). |
 | Heart-rate day | ✅ (HealthHeartRate, v2) | ✅ `heartRate` | ⬜ none (v2 path) | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Likely never fires (V3 watch). HR may live in `heart_rate_second` instead. |
 | Respiratory | ✅ (HealthRespiratoryRate) | — no flag | ⬜ none yet | ✅ | ✅ | SDK_MODEL_ONLY | Confirm emission; no capability flag to lean on. |
-| Intraday HR (`heart_rate_second`) | ✅ (HealthHeartRateSecond) | — no flag | ✅ **delivered, DROPPED**⁴ | ❌ | ❌ | EMITTED_ON_REAL_SYNC | **Deferred** — record carries no mappable timestamps (see §"Intraday HR investigation"). Needs a VeryFit capture before mapping. |
+| Intraday HR (`heart_rate_second`) | ✅ (HealthHeartRateSecond) | — no flag | ✅ 330/day⁴ | ✅ | ✅ | **SHOWN_IN_UI** | Done 2026-06-29. `item.offset` is a per-item **delta in seconds** — accumulate (`recordedAt = midnight + Σoffset`); see §"Intraday HR investigation". |
 | Swimming | ✅ (HealthSwimming) | ✅ `pool_swim` | ⬜ none yet | ❌ | ❌ | FUNCTION_TABLE_SUPPORTED | Out of scope unless wanted; needs domain model + schema. |
 | Ambient noise | ✅ (HealthNoise) | ✅ `V3_health_sync_noise` | ⬜ none yet | ❌ | ❌ | FUNCTION_TABLE_SUPPORTED | Low priority; needs domain model + schema. |
 | Temperature | ✅ (HealthTemperature) | ❌ `V3_health_sync_temperature` | ⬜ none | ✅ | ✅ | SDK_MODEL_ONLY | No sensor on A4P — leave as-is. |
@@ -62,9 +62,9 @@ Notes:
 3. "None yet" = the watch **advertises** support but no record fell in the synced window (no
    workout/sleep/SpO₂ in the incremental data). Capability is proven; emission needs the relevant
    activity on the watch, then a sync.
-4. `heart_rate_second` is **delivered by the Active 4 Pro and currently dropped** — discovered only
-   because Phase-2 instrumentation made the previously-silent no-op sinks observable. Investigated
-   below; deferred (no mappable timestamps in the delivered record).
+4. `heart_rate_second` is **delivered, mapped, and uploaded** (resolved 2026-06-29). The per-item
+   `offset` is a delta in seconds since the previous item; accumulating it gives the wall clock. See
+   the §"Intraday HR investigation" resolution note. ~330 readings/day verified end-to-end.
 5. **Verified 2026-06-28** (SM-G991B, debug build). After recording a workout + an SpO₂ reading on
    the watch, a sync delivered `workout_v3(p=1,i=0,m=1)` and `spo2(p=1,i=4,m=1)` (SpO₂ percent=97);
    both reached `metric confidence: …=SHOWN_IN_UI`, and the batch uploaded real (`--> POST
@@ -84,22 +84,41 @@ sub-fields and resynced; findings:
   with a clean 5-minute time-of-day grid (which would fill only up to "now"). Count growth was
   slow/noisy (282→286 over 7 min), and delivery is intermittent (periodic chunk, not every sync).
 
-**Conclusion:** the `items[]` samples cannot be reliably placed on the wall clock from the delivered
-record alone — there are no per-sample offsets, and the fields that would anchor them (`hr_data`
-hour/minute, `five_min_data`, `silentHR`) are all unpopulated. Mapping would require reverse-
-engineering the sample cadence from an official-app btsnoop capture or the native decode — the
-protocol-RE work explicitly out of scope for this phase. **Intraday HR is therefore deferred**, kept
-instrumented (emitted count + a debug shape probe) and documented here.
+**Conclusion (2026-06-26 — SUPERSEDED):** the `items[]` samples cannot be reliably placed on the wall
+clock from the delivered record alone… *This was wrong: the 2026-06-26 probe never logged the
+per-item `offset` field, so it looked like the items were bare BPM ints.*
+
+### RESOLUTION (2026-06-29) — delta-seconds, hardware-verified
+
+The enhanced probe logged `item.offset`, and the encoding is now settled and verified end-to-end:
+
+- Each `HealthHeartRateSecondItem.offset` is a **delta in seconds since the previous item** (byte-sized,
+  `0..255`). Wall clock = the **running sum**: `cum += item.offset; recordedAt = midnight(y,m,d) + cum`.
+  `startTime` is 0/unused.
+- Gaps wider than a byte are split into `offset=255, heartRateVal=0` continuation sentinels (a long
+  unworn stretch = a run of consecutive 255s). The hr=0 sentinels skip the `1..250` bpm guard but their
+  offset **must still accumulate** or every later sample drifts.
+- Unit pinned to **seconds** by three independent anchors: a full day (2026-06-28) sums to 86109 s →
+  last sample 23:55:09 (~24 h span); the partial current day (2026-06-29) to 38721 s → last 10:45:21,
+  ~4 min before the 10:49 sync; and the native C layer logs `start_time`/`end_time` in seconds-of-day
+  (38721→39040) matching exactly. Reconstructed against the raw `files/ido-logs/*.log` JSON.
+- A first buggy sync (raw offset, not accumulated) crammed all readings into 00:00–00:04 and uploaded
+  garbage rows for 06-28/06-29 → review-only fix in `docs/plans/hr2nd-dashboard-cleanup.sql`.
+
+**Caution for future RE:** the misleading first oracle read was VeryFit's `BaseMeasurementPresenter.getOffset`,
+which is the *manual one-click-measure writer* (absolute), NOT the device-sync decoder (delta). When the
+decompile and the live wire disagree, the **live wire wins** — always confirm a VeryFit-derived formula
+against a real probe.
 
 ## Phase-2 conclusion & next slice
 
 - **Instrumentation + verification: complete.** Every SDK callback is now tallied; a real sync logs
   a counts-only diagnostics summary, a delivered-but-dropped list, and a per-metric confidence line.
 - **Proven end-to-end (SHOWN_IN_UI):** activity day, body energy, stress, HRV, **workout (2026-06-28),
-  SpO₂ (2026-06-28)**.
+  SpO₂ (2026-06-28)**, **intraday HR (2026-06-29)**.
 - **Capable but unverified (need on-watch activity):** sleep — sync after a night's sleep to confirm
   emission; already wired through upload + UI. (Workout + SpO₂ confirmed 2026-06-28, see note 5.)
-- **Intraday HR:** emitted but **deferred** — unmappable without a VeryFit capture (above).
+- **Intraday HR:** RESOLVED 2026-06-29 — delta-seconds accumulation, verified end-to-end (above).
 
 Recommended next step: confirm the **capable-but-unverified** metrics (workout/sleep/SpO₂) by
 syncing after the relevant on-watch activity — that needs **no code**, just data, and closes the
