@@ -893,31 +893,51 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         // V3 "heart rate second" record carries the Active 4 Pro's intraday HR (the v2 daily-HR path
         // never fires here). The full downstream pipeline IS wired — domain [WatchHeartRateReading],
         // [WatchHealthListener.onHeartRateReading], the uploader buffer, [WatchHeartRateReadingDto],
-        // the dashboard `watch_heart_rate_readings` table + route, and the Watch-screen count — so
-        // turning this on is just emitting one reading per item below.
+        // the dashboard `watch_heart_rate_readings` table + route, and the Watch-screen count.
         //
-        // The ONE missing piece is the per-item wall-clock timestamp. Each [HealthHeartRateSecondItem]
-        // carries `heartRateVal` AND an `offset` (the field the old probe never logged); the parent
-        // has `startTime` (observed 0), a `five_min_data` list, and `hr_data` high/low entries that DO
-        // carry hour:minute. The mapping is almost certainly
-        //   recordedAt = midnight(date) + (startTime + offset) * <unit> seconds   (unit = 60? 300?)
-        // mirroring the other point metrics — but the offset UNIT and whether startTime participates
-        // must be confirmed against a real probe (offsetRange / stepHisto / hr_data alignment) before
-        // we emit, NOT guessed (a wrong unit silently mis-times every sample). The enhanced probe
-        // below logs exactly that. Once a real `heartRateSecond probe:` line confirms the step, add:
-        //   items.forEach { if (it.heartRateVal in 1..250) runCatching {
-        //       WatchTime.localDateTime(year, month, day, (startTime + it.offset) * UNIT)
-        //   }.onSuccess { ts -> listener?.onHeartRateReading(WatchHeartRateReading(ts, it.heartRateVal)); mapped++ } }
-        // and record mappedReadings = mapped. Debug-gated (decoded health data). Mapping deferred.
+        // Per-item wall-clock: each [HealthHeartRateSecondItem] carries `heartRateVal` + `offset`. The
+        // offset is NOT an absolute time — it is a **delta in seconds since the previous item**, so the
+        // wall-clock is the RUNNING SUM of offsets across the whole list:
+        //   cum += item.offset ;  recordedAt = midnight(year, month, day) + cum seconds   (startTime=0, unused)
+        // Gaps wider than a byte are split into `offset=255, heartRateVal=0` continuation sentinels
+        // (a long unworn stretch shows up as a run of consecutive 255s); the hr=0 entries fail the bpm
+        // guard so they emit nothing, but their offset MUST still accumulate or every later sample drifts.
+        //
+        // This is HARDWARE-MEASURED (2026-06-29), not the earlier `getOffset` guess — that oracle read
+        // was the manual one-click-measure WRITER path, which is absolute; the device-SYNC payload is
+        // delta-encoded (offsetRange=[0..255], byte deltas). Verified against the raw `ido-logs` JSON
+        // with two independent wall-clock anchors: a full day (2026-06-28) accumulates to 86109 s → last
+        // sample 23:55:09 (≈ a 24 h span), and the partial current day (2026-06-29) accumulates to
+        // 38721 s → last sample 10:45:21, ~4 min before the 10:49:40 sync. Both pin the unit to seconds.
+        // Probe kept below for regression visibility. Debug-gated (decoded data).
         override fun onGetHealthHeartRateSecondData(
             data: com.ido.ble.data.manage.database.HealthHeartRateSecond?,
             isLast: Boolean,
         ) {
             if (data == null || data.year == 0) return
-            val itemCount = data.items?.size ?: 0
-            diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1, itemSamples = itemCount)
+            val items = data.items ?: emptyList()
+            val itemCount = items.size
+            // offset is a per-item delta in seconds; accumulate over ALL items, emit on plausible bpm.
+            var mapped = 0
+            var cum = 0
+            items.forEach { item ->
+                cum += item.offset
+                if (item.heartRateVal !in 1..250) return@forEach
+                val cumSeconds = cum
+                runCatching {
+                    WatchTime.localDateTime(data.year, data.month, data.day, cumSeconds)
+                }.onSuccess { ts ->
+                    listener?.onHeartRateReading(WatchHeartRateReading(recordedAt = ts, bpm = item.heartRateVal))
+                    mapped++
+                }
+            }
+            diagnostics.record(
+                WatchSyncDiagnostics.HEART_RATE_SECOND,
+                parentRecords = 1,
+                itemSamples = itemCount,
+                mappedReadings = mapped,
+            )
             if (BuildConfig.DEBUG) {
-                val items = data.items ?: emptyList()
                 val vals = items.map { it.heartRateVal }
                 val offsets = items.map { it.offset }
                 val nonZero = vals.count { it > 0 }
