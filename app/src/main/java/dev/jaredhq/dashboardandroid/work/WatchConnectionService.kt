@@ -71,7 +71,9 @@ class WatchConnectionService : Service() {
         scope.launch {
             while (isActive) {
                 delay(SYNC_INTERVAL_MS)
-                if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
+                if (isDashboardConfigured() &&
+                    engine.connectionState.value == WatchEngineConnectionState.CONNECTED
+                ) {
                     runCatching { engine.syncHealth() }
                 }
             }
@@ -154,10 +156,13 @@ class WatchConnectionService : Service() {
             .onFailure { Log.w(TAG, "mute failed", it) }
     }
 
-    /** Run only while mirroring is enabled (notification access) and the app is configured. */
+    /** Run while notification access is granted and either dashboard sync or music needs the link. */
     private fun shouldRun(ctx: Context): Boolean =
         NotificationAccess.isGranted(ctx) &&
-            ServiceLocator.settings.baseUrlSnapshot().isNotBlank() &&
+            (isDashboardConfigured() || ServiceLocator.watchMusicController.state.value.enabled)
+
+    private fun isDashboardConfigured(): Boolean =
+        ServiceLocator.settings.baseUrlSnapshot().isNotBlank() &&
             !ServiceLocator.settings.tokenSnapshot().isNullOrBlank()
 
     private fun stopMirroring(engine: WatchEngine) {
@@ -180,7 +185,7 @@ class WatchConnectionService : Service() {
             .setSmallIcon(R.drawable.ic_stat_notify)
             .setColor(getColor(R.color.brand_accent))
             .setContentTitle("Watch connected")
-            .setContentText("Keeping your watch linked to mirror calls and texts.")
+            .setContentText("Keeping your watch linked for notifications and music.")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -231,8 +236,9 @@ class WatchConnectionService : Service() {
             ServiceLocator.init(context.applicationContext)
             val configured = ServiceLocator.settings.baseUrlSnapshot().isNotBlank() &&
                 !ServiceLocator.settings.tokenSnapshot().isNullOrBlank()
+            val musicEnabled = ServiceLocator.watchMusicController.state.value.enabled
             val intent = Intent(context, WatchConnectionService::class.java)
-            if (configured && NotificationAccess.isGranted(context)) {
+            if ((configured || musicEnabled) && NotificationAccess.isGranted(context)) {
                 ContextCompat.startForegroundService(context, intent)
             } else {
                 context.stopService(intent)

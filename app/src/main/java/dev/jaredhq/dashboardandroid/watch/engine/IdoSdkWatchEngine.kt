@@ -68,6 +68,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     override val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent> =
         _controlEvents.asSharedFlow()
 
+    private val _musicControlEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<WatchMusicControlEvent>(extraBufferCapacity = 8)
+    override val musicControlEvents: kotlinx.coroutines.flow.SharedFlow<WatchMusicControlEvent> =
+        _musicControlEvents.asSharedFlow()
+
+    private val _musicCapabilities = MutableStateFlow(WatchMusicCapabilities())
+    override val musicCapabilities: StateFlow<WatchMusicCapabilities> =
+        _musicCapabilities.asStateFlow()
+
+    @Volatile
+    private var phoneMusicEnabled = false
+
+    @Volatile
+    private var appliedPhoneMusicEnabled: Boolean? = null
+
+    @Volatile
+    private var latestNowPlaying: WatchNowPlaying? = null
+
     @Volatile
     private var initialized = false
 
@@ -263,6 +281,91 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     override fun isConnected(): Boolean = BLEManager.isConnected()
+
+    override fun setPhoneMusicEnabled(enabled: Boolean): Boolean {
+        phoneMusicEnabled = enabled
+        return applyPhoneMusicEnabled()
+    }
+
+    override fun pushNowPlaying(nowPlaying: WatchNowPlaying): Boolean {
+        latestNowPlaying = nowPlaying
+        if (!phoneMusicEnabled || !isConnected() ||
+            _connectionState.value != WatchEngineConnectionState.CONNECTED ||
+            cachedFunctionInfo?.bleControlMusic != true
+        ) {
+            return false
+        }
+        return sendNowPlaying(nowPlaying)
+    }
+
+    private fun applyPhoneMusicEnabled(): Boolean {
+        if (!isConnected() ||
+            _connectionState.value != WatchEngineConnectionState.CONNECTED
+        ) {
+            appliedPhoneMusicEnabled = null
+            return false
+        }
+        val capabilities = _musicCapabilities.value
+        if (phoneMusicEnabled && (!capabilities.known || !capabilities.phoneMusicControl)) {
+            return false
+        }
+        if (appliedPhoneMusicEnabled == phoneMusicEnabled) {
+            if (phoneMusicEnabled) latestNowPlaying?.let(::sendNowPlaying)
+            return true
+        }
+        return runCatching {
+            BLEManager.setMusicSwitchPending(phoneMusicEnabled)
+            BLEManager.setMusicSwitch(phoneMusicEnabled)
+            if (phoneMusicEnabled) {
+                BLEManager.enterMusicMode()
+                latestNowPlaying?.let(::sendNowPlaying)
+            } else {
+                BLEManager.setMusicControlInfo(
+                    com.ido.ble.protocol.model.MusicControlInfo().apply {
+                        status = com.ido.ble.protocol.model.MusicControlInfo.STATUS_STOP
+                        curTimeSecond = 0
+                        totalTimeSecond = 0
+                        musicName = ""
+                        singerName = ""
+                    },
+                )
+                BLEManager.exitMusicMode()
+            }
+            appliedPhoneMusicEnabled = phoneMusicEnabled
+            Log.i(TAG, "phone music mode enabled=$phoneMusicEnabled")
+            true
+        }.getOrElse {
+            Log.w(TAG, "phone music mode update failed enabled=$phoneMusicEnabled", it)
+            false
+        }
+    }
+
+    private fun sendNowPlaying(nowPlaying: WatchNowPlaying): Boolean = runCatching {
+        val info = com.ido.ble.protocol.model.MusicControlInfo().apply {
+            status = when (nowPlaying.state) {
+                WatchPlaybackState.PLAYING ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_PLAY
+                WatchPlaybackState.PAUSED ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_PAUSE
+                WatchPlaybackState.STOPPED ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_STOP
+            }
+            curTimeSecond = nowPlaying.positionSeconds.coerceAtLeast(0)
+            totalTimeSecond = nowPlaying.durationSeconds.coerceAtLeast(0)
+            musicName = nowPlaying.title
+            singerName = if (_musicCapabilities.value.artistName) nowPlaying.artist else ""
+        }
+        BLEManager.setMusicControlInfo(info)
+        Log.i(
+            TAG,
+            "now-playing pushed state=${nowPlaying.state} " +
+                "titleLen=${nowPlaying.title.length} artistLen=${nowPlaying.artist.length}",
+        )
+        true
+    }.getOrElse {
+        Log.w(TAG, "now-playing push failed", it)
+        false
+    }
 
     override fun syncHealth() {
         if (!isConnected()) {
@@ -527,6 +630,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
             notifyStatesEnabled = false
+            appliedPhoneMusicEnabled = null
+            _musicCapabilities.value = WatchMusicCapabilities()
             // The link is down for good; a wedge-watchdog from this attempt no longer applies.
             connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
@@ -563,10 +668,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     // ── Device → app control (W7 call control) ────────────────────────────────────────
-    // The watch sends these when the user taps answer/reject/mute on an incoming-call notification
-    // we pushed with the support* flags set. We translate to domain [WatchControlEvent]s; the app's
-    // connection service performs the actual telephony action. Non-call controls (media/camera/volume)
-    // are ignored for now.
+    // Call actions flow to WatchConnectionService. Music actions flow to the app-owned media-session
+    // controller, which allows a short grace period for native AVRCP before applying a GATT fallback.
     private val deviceControlCallBack = object : com.ido.ble.callback.DeviceControlAppCallBack.ICallBack {
         override fun onControlEvent(
             type: com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType?,
@@ -585,6 +688,23 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 Log.i(TAG, "device control: $type → $event")
                 _controlEvents.tryEmit(event)
             }
+            val musicEvent = when (type) {
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.START ->
+                    WatchMusicControlEvent.PLAY
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.PAUSE ->
+                    WatchMusicControlEvent.PAUSE
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.STOP ->
+                    WatchMusicControlEvent.STOP
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.NEXT ->
+                    WatchMusicControlEvent.NEXT
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.PREVIOUS ->
+                    WatchMusicControlEvent.PREVIOUS
+                else -> null
+            }
+            if (musicEvent != null) {
+                Log.i(TAG, "device music control: $type")
+                _musicControlEvents.tryEmit(musicEvent)
+            }
         }
 
         override fun onAntiLostNotice(on: Boolean, time: Long) {}
@@ -598,6 +718,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onGetFunctionTable(info: SupportFunctionInfo?) {
             functionTableCached = info != null
             cachedFunctionInfo = info
+            _musicCapabilities.value = WatchMusicCapabilities(
+                known = info != null,
+                phoneMusicControl = info?.bleControlMusic == true,
+                artistName = info?.V3_music_control_02_add_singer_name == true,
+                onboardMusic = info?.V3_support_v3_ble_music == true,
+            )
             Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
             if (info != null) logFunctionTable()
             if (pendingSyncAfterFunctionTable) {
@@ -608,6 +734,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     Log.w(TAG, "function table is null — cannot complete sync")
                     listener?.onSyncFailed()
                 }
+            } else if (info != null) {
+                applyPhoneMusicEnabled()
             }
         }
     }
@@ -623,6 +751,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
             enableMessageNotifyStates()
+            schedulePhoneMusicApply()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
@@ -632,8 +761,17 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
             enableMessageNotifyStates()
+            schedulePhoneMusicApply()
             listener?.onSyncFailed()
         }
+    }
+
+    /** Keep music commands out of the ordered health sync and the notify-state command beside it. */
+    private fun schedulePhoneMusicApply() {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+            { applyPhoneMusicEnabled() },
+            500L,
+        )
     }
 
     /**
@@ -1025,6 +1163,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             TAG,
             "W7 notify path: v3_add_app_name=${readFunctionFlag("V3_support_set_v3_notify_add_app_name")}, " +
                 "ex_v3_notify_msg=${readFunctionFlag("ex_table_main10_v3_notify_msg")}",
+        )
+        Log.i(
+            TAG,
+            "music capabilities: control=${readFunctionFlag("bleControlMusic")}, " +
+                "artist=${readFunctionFlag("V3_music_control_02_add_singer_name")}, " +
+                "onboard=${readFunctionFlag("V3_support_v3_ble_music")}, " +
+                "appSpp=${readFunctionFlag("support_app_connect_with_spp")}",
         )
     }
 

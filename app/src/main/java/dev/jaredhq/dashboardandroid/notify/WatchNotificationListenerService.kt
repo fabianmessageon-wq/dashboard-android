@@ -1,6 +1,7 @@
 package dev.jaredhq.dashboardandroid.notify
 
 import android.app.Notification
+import android.content.ComponentName
 import android.provider.Telephony
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -33,6 +34,32 @@ class WatchNotificationListenerService : NotificationListenerService() {
     // we tell the watch to drop its incoming-call screen ([WatchEngine.stopIncomingCall]). A call is
     // mirrored via the dedicated call API, not the message list, so it needs an explicit "ended".
     private val callKeys = ConcurrentHashMap.newKeySet<String>()
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        runCatching {
+            ServiceLocator.init(applicationContext)
+            ServiceLocator.watchMusicController.start(
+                ComponentName(this, WatchNotificationListenerService::class.java),
+            )
+        }.onFailure { Log.w(TAG, "music session listener start failed", it) }
+    }
+
+    override fun onListenerDisconnected() {
+        runCatching {
+            ServiceLocator.init(applicationContext)
+            ServiceLocator.watchMusicController.stop()
+        }.onFailure { Log.w(TAG, "music session listener stop failed", it) }
+        super.onListenerDisconnected()
+    }
+
+    override fun onDestroy() {
+        runCatching {
+            ServiceLocator.init(applicationContext)
+            ServiceLocator.watchMusicController.stop()
+        }
+        super.onDestroy()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return

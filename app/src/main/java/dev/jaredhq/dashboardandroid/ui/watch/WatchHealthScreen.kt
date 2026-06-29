@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothDisabled
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -26,6 +27,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
+import dev.jaredhq.dashboardandroid.notify.NotificationAccess
+import dev.jaredhq.dashboardandroid.watch.engine.WatchPlaybackState
+import dev.jaredhq.dashboardandroid.work.WatchConnectionService
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState.BINDING
@@ -60,6 +65,7 @@ fun WatchHealthScreen(
     onSync: () -> Unit,
     onSendTestNotification: () -> Unit,
     onNotificationHintShown: () -> Unit,
+    onPhoneMusicEnabledChange: (Boolean) -> Unit,
     onPermissionsGranted: () -> Unit,
     onPermissionsDenied: () -> Unit,
 ) {
@@ -87,7 +93,21 @@ fun WatchHealthScreen(
         if (allGranted) onPermissionsGranted() else permissionLauncher.launch(permissions)
     }
 
-    WatchHealthContent(state, onConnect, onDisconnect, onSync, onSendTestNotification, onNotificationHintShown)
+    WatchHealthContent(
+        state = state,
+        onConnect = onConnect,
+        onDisconnect = onDisconnect,
+        onSync = onSync,
+        onSendTestNotification = onSendTestNotification,
+        onNotificationHintShown = onNotificationHintShown,
+        onPhoneMusicEnabledChange = { enabled ->
+            onPhoneMusicEnabledChange(enabled)
+            WatchConnectionService.syncRunState(context)
+        },
+        onOpenNotificationAccess = {
+            context.startActivity(NotificationAccess.settingsIntent())
+        },
+    )
 }
 
 @Composable
@@ -98,6 +118,8 @@ private fun WatchHealthContent(
     onSync: () -> Unit,
     onSendTestNotification: () -> Unit = {},
     onNotificationHintShown: () -> Unit = {},
+    onPhoneMusicEnabledChange: (Boolean) -> Unit = {},
+    onOpenNotificationAccess: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -121,6 +143,12 @@ private fun WatchHealthContent(
         }
 
         ActionButtons(state, onConnect, onDisconnect, onSync)
+
+        MusicCard(
+            state = state,
+            onEnabledChange = onPhoneMusicEnabledChange,
+            onOpenNotificationAccess = onOpenNotificationAccess,
+        )
 
         // W7: once connected, allow pushing a sample notification to the watch face to verify the
         // message path on-device. Hidden while syncing (the single GATT link is busy).
@@ -148,6 +176,85 @@ private fun WatchHealthContent(
 
         Spacer(Modifier.height(8.dp))
     }
+}
+
+@Composable
+private fun MusicCard(
+    state: WatchHealthUiState,
+    onEnabledChange: (Boolean) -> Unit,
+    onOpenNotificationAccess: () -> Unit,
+) {
+    val phoneMusic = state.phoneMusic
+    val capabilities = state.musicCapabilities
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(Icons.Filled.MusicNote, contentDescription = null)
+                Column(Modifier.weight(1f)) {
+                    Text("Now playing on watch", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Show phone playback and use wrist controls.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(checked = phoneMusic.enabled, onCheckedChange = onEnabledChange)
+            }
+
+            if (phoneMusic.enabled && !phoneMusic.notificationListenerConnected) {
+                Text(
+                    "Notification access is required to read the active media session.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                OutlinedButton(
+                    onClick = onOpenNotificationAccess,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Open notification access") }
+            }
+
+            if (capabilities.known && !capabilities.phoneMusicControl) {
+                Text(
+                    "This connected watch does not report phone music control support.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (phoneMusic.enabled) {
+                phoneMusic.nowPlaying?.let { track ->
+                    Text(track.title, style = MaterialTheme.typography.bodyLarge)
+                    if (track.artist.isNotBlank()) {
+                        Text(track.artist, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        "${track.state.label()} · ${formatPlaybackTime(track.positionSeconds)} / " +
+                            formatPlaybackTime(track.durationSeconds),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                } ?: Text(
+                    if (phoneMusic.notificationListenerConnected) "No active track."
+                    else "Waiting for notification access.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+private fun WatchPlaybackState.label(): String = when (this) {
+    WatchPlaybackState.PLAYING -> "Playing"
+    WatchPlaybackState.PAUSED -> "Paused"
+    WatchPlaybackState.STOPPED -> "Stopped"
+}
+
+private fun formatPlaybackTime(totalSeconds: Int): String {
+    val seconds = totalSeconds.coerceAtLeast(0)
+    return "%d:%02d".format(seconds / 60, seconds % 60)
 }
 
 @Composable

@@ -19,6 +19,9 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicCapabilities
+import dev.jaredhq.dashboardandroid.watch.music.PhoneMusicState
+import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -78,6 +81,8 @@ data class WatchHealthUiState(
     val lastSync: WatchSyncSummary? = null,
     /** Transient feedback for the last "send test notification" press (W7), or null. */
     val notificationHint: String? = null,
+    val musicCapabilities: WatchMusicCapabilities = WatchMusicCapabilities(),
+    val phoneMusic: PhoneMusicState = PhoneMusicState(),
 ) {
     val syncing: Boolean get() = connection == WatchEngineConnectionState.SYNCING
 }
@@ -100,6 +105,7 @@ class WatchHealthViewModel(
     private val deviceId: String,
     private val registerUiListener: (WatchHealthListener?) -> Unit,
     private val registerUploadListener: (((WatchUploadOutcome) -> Unit)?) -> Unit = {},
+    private val musicController: WatchMusicController,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WatchHealthUiState())
@@ -154,6 +160,16 @@ class WatchHealthViewModel(
                         liveCounts = if (resetLive) WatchSyncCounts() else prev.liveCounts,
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            engine.musicCapabilities.collect { capabilities ->
+                _state.update { it.copy(musicCapabilities = capabilities) }
+            }
+        }
+        viewModelScope.launch {
+            musicController.state.collect { music ->
+                _state.update { it.copy(phoneMusic = music) }
             }
         }
     }
@@ -221,6 +237,10 @@ class WatchHealthViewModel(
     /** Clear the transient notification feedback once shown. */
     fun clearNotificationHint() {
         _state.update { it.copy(notificationHint = null) }
+    }
+
+    fun setPhoneMusicEnabled(enabled: Boolean) {
+        musicController.setEnabled(enabled)
     }
 
     override fun onCleared() {

@@ -18,6 +18,8 @@ import dev.jaredhq.dashboardandroid.watch.engine.UploadingWatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
+import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchMusicController
+import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,9 @@ object ServiceLocator {
 
     /** App-lifetime scope for fire-and-forget watch health uploads (off the SDK callback thread). */
     private val watchUploadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** App-lifetime main-thread scope for Android media-session callbacks and watch controls. */
+    private val watchMusicScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /** The single bound watch (Active 4 Pro) MAC — used as the dashboard device id + connect target. */
     const val watchDeviceId = "F4:91:29:51:C6:45"
@@ -77,6 +82,9 @@ object ServiceLocator {
      * [WatchEngine] interface without touching callers.
      */
     lateinit var watchEngine: WatchEngine
+        private set
+
+    lateinit var watchMusicController: WatchMusicController
         private set
 
     private lateinit var appContext: Context
@@ -125,6 +133,12 @@ object ServiceLocator {
                     android.util.Log.e("ServiceLocator", "Watch engine init failed", e)
                 }
             }
+
+            watchMusicController = AndroidWatchMusicController(
+                context = appContext,
+                engine = watchEngine,
+                scope = watchMusicScope,
+            )
 
             initialized = true
         }

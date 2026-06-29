@@ -261,6 +261,7 @@ private fun AppRoot(startRoute: MutableState<String?>) {
                     onSync = vm::syncNow,
                     onSendTestNotification = vm::sendTestNotification,
                     onNotificationHintShown = vm::clearNotificationHint,
+                    onPhoneMusicEnabledChange = vm::setPhoneMusicEnabled,
                     onPermissionsGranted = vm::onPermissionsGranted,
                     onPermissionsDenied = vm::onPermissionsDenied,
                 )

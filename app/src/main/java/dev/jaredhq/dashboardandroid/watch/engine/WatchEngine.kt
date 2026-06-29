@@ -58,6 +58,12 @@ interface WatchEngine {
      */
     val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent>
 
+    /** Phone-playback actions delivered by the watch over the engine transport. */
+    val musicControlEvents: kotlinx.coroutines.flow.SharedFlow<WatchMusicControlEvent>
+
+    /** Music feature flags for the connected watch; unknown until its function table arrives. */
+    val musicCapabilities: StateFlow<WatchMusicCapabilities>
+
     /**
      * Current connection lifecycle, for the UI to observe. Starts at
      * [WatchEngineConnectionState.DISCONNECTED] and advances through scan → connect → bind → sync.
@@ -85,6 +91,12 @@ interface WatchEngine {
      * immediately. No-op (or [WatchHealthListener.onSyncFailed]) if not connected.
      */
     fun syncHealth()
+
+    /** Enable/disable phone music control on the watch. The desired state survives reconnects. */
+    fun setPhoneMusicEnabled(enabled: Boolean): Boolean = false
+
+    /** Push the phone's current media-session snapshot to the watch. */
+    fun pushNowPlaying(nowPlaying: WatchNowPlaying): Boolean = false
 
     /**
      * Push a single [notification] to the watch face (W7) — e.g. a dashboard reminder or quote.
