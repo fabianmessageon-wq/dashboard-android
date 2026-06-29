@@ -122,6 +122,11 @@ Confirmed-correct (no change needed):
 
 Known limitations to verify/accept on hardware (documented, not "working"):
 
+> **⚠ Superseded by the 2026-06-28 hardware results below.** The two bullets here pre-date hardware:
+> the Active 4 Pro turned out to need the **`NotificationPara`** send path (not `V3MessageNotice`), and
+> its wrist call control runs over **Bluetooth HFP**, not the SDK `controlEvents` path. See
+> "Hardware results" below for what actually happens. Kept for history.
+
 - **Call answer/reject from the wrist is only wired while `WatchConnectionService` (always-on link) is
   running.** It is the *only* collector of `engine.controlEvents`; the on-demand paths (Watch screen,
   `WatchSyncWorker`) do not collect them. With mirroring disabled (no notification access / no
@@ -144,19 +149,82 @@ Local JVM (pure, no device):
 - [ ] Dedup: two posts with the same `sbn.key` inside 5 s forward once; after `onNotificationRemoved`
       the next post forwards again.
 
-Hardware (Fabian's phone + Active 4 Pro):
+### Hardware results (Fabian's phone + Active 4 Pro, 2026-06-28, SM-G991B / Android 14, debug)
 
-- [ ] **Logcat privacy (regression for the fix above):** trigger an incoming call and an SMS while the
-      watch is linked; confirm logcat shows `sendNotification (… ) category=… len=…` and **never** the
-      caller name or SMS body, on a release/non-debug build.
-- [ ] Grant notification access + configure dashboard; confirm `WatchConnectionService` starts and an
-      incoming call/SMS mirrors to the watch face in real time (always-on link).
-- [ ] Record which `sendNotification` branch fires for a call (V3 notice vs new message) to learn
-      whether the Active 4 Pro shows answer/reject buttons at all.
-- [ ] If the V3 path is used: tap answer / reject / mute on the watch and confirm the phone call is
-      accepted / ended / silenced (needs `ANSWER_PHONE_CALLS` granted; mute is best-effort).
-- [ ] Confirm with mirroring **disabled** (no notification access) a watch control tap is a no-op and
-      `WatchConnectionService` is not running.
+**Headline:** W7 mirroring was *wired but non-functional on this watch* until a send-path fix this
+session. Root cause: the Active 4 Pro advertises `V3_support_set_v3_notify_add_app_name=true`, so its
+firmware expects notifications via the **`NotificationPara`** path (`BLEManager.sendNotification`), and
+**ignores** the legacy `setV3MessageNotice` our engine was using — the SDK accepted the send but the
+watch silently dropped it. Two fixes landed in `IdoSdkWatchEngine`:
+  1. `enableMessageNotifyStates()` — push `MessageNotifyState{notify_state=ALLOW}` for CALL/SMS/
+     MISSED_CALL/GENERIC via `addMessageNotifyState(list,0,0)` after each sync (mirrors VeryFit's
+     `RemindDataManager.sendDefaultNotificationState2Device`). The watch gates display on this.
+  2. `sendNotification` now uses **`NotificationPara`** (with an app-name `items` entry) when
+     `V3_support_set_v3_notify_add_app_name` is set; incoming **calls** route through the dedicated
+     call API `setIncomingCallInfo` / `setStopInComingCall` (VeryFit's `sendCallReminder2DeviceNew`).
+     Legacy `V3MessageNotice` / `NewMessageInfo` remain as fallbacks for other watches.
+
+- [x] **Logcat privacy (regression):** **PASS.** SMS + call sends log only `sendNotification
+      (NotificationPara) category=SMS len=65` / `sendNotification (incoming call) len=20` — **no caller
+      name / SMS body**. The app-level summary is info-level/unconditional, so debug == release for this
+      line. The native "DEBUG LOG" stream (which *does* print content) is silenced on release via
+      `EnableLog(BuildConfig.DEBUG,…)`/`ProtocolSetLogEnable(BuildConfig.DEBUG)` — full on-device
+      release confirmation still wants a release APK, but the gating is verified in source.
+- [x] **Mirroring (always-on link):** **PASS.** Granted notification access + ANSWER_PHONE_CALLS via
+      `adb` (`cmd notification allow_listener …` / `pm grant`), launched the app → `WatchConnectionService`
+      runs foreground (`types=00000010` = CONNECTED_DEVICE), auto-connected the watch, synced, and a
+      real SMS **displayed on the watch face in real time**. (Required both fixes above; before them the
+      send was accepted but nothing showed.) Health sync in the same run uploaded for real
+      (`--> POST …/watch/health` → `<-- 201` → `uploaded 833 records (stored=833)`).
+- [x] **Which send path fires:** **NotificationPara** for messages (logged `sendNotification
+      (NotificationPara)`); incoming calls go through `setIncomingCallInfo`. The old "V3 notice vs new
+      message" question is moot — this watch needs neither; it needs `NotificationPara`.
+- [x] **Wrist call control (answer/reject/mute):** **PASS — but via Bluetooth HFP, not our SDK path.**
+      Calls display on the watch and tapping **reject ends the phone call** (confirmed by Fabian, twice).
+      Diagnostic finding: the watch is **also bonded as a Bluetooth Hands-Free (HFP) + HID device**
+      (`dumpsys bluetooth_manager`: `(Connected) F4:91:29:51:C6:45 [DUAL] Active 4 Pro (…,Handsfree,Hid)`,
+      `BluetoothHeadset … STATE_CONNECTED`), so Android's telephony stack executes answer/reject over
+      HFP natively. Our `deviceControlCallBack` **never fires** (verified with a temp raw-event log: no
+      `onControlEvent` on a wrist tap) and `WatchConnectionService` logs no control event — i.e. the
+      app's SDK-based call-control path (`controlEvents` → telephony actions, `ANSWER_PHONE_CALLS`) is
+      **dead code for this watch**, retained only as a fallback for watches that deliver call control
+      over the IDO GATT channel. **Open design question:** keep that fallback, or simplify to
+      notifications-only and let HFP own calls (see handoff).
+- [x] Confirm with mirroring **disabled** (no notification access) a watch control tap is a no-op and
+      `WatchConnectionService` is not running. **PASS (baseline, 2026-06-28, SM-G991B).** As shipped on
+      the phone today: `settings get secure enabled_notification_listeners` does **not** list
+      `dev.jaredhq.dashboardandroid` (only Samsung/Google listeners), `dumpsys activity services
+      dev.jaredhq.dashboardandroid` shows **no** `WatchConnectionService`, and `ANSWER_PHONE_CALLS`
+      is `granted=false`. A wrist control tap is structurally a no-op while disabled:
+      `WatchConnectionService` is the *only* collector of `engine.controlEvents` (verified in source),
+      so with the service not running nothing acts on a control event even if the watch emitted one.
+
+### W7 reliability checks (boot re-arm / always-on / worker / network), 2026-06-28
+
+- [x] **Boot + update re-arm:** **PASS.** `BootReceiver` re-arms `WatchConnectionService` on **both**
+      triggers without the app being opened: update — `re-arming watch link after
+      …MY_PACKAGE_REPLACED`, service foreground with `reasonCode:PACKAGE_REPLACED`; cold reboot —
+      `re-arming watch link after …BOOT_COMPLETED`, service foreground with `reasonCode:BOOT_COMPLETED`,
+      and Fabian confirmed the "Watch connected" notification reappeared on its own after reboot
+      (no app launch). `types=00000010` (CONNECTED_DEVICE) throughout.
+- [x] **Always-on link + auto-connect + reconnect:** **PASS (with one transient note).** The
+      `connectedDevice` FGS persisted across the whole session including the reboot. On start/boot the
+      `maintain()` loop auto-scans + connects (`maintaining link → connect` → scan → `onConnectSuccess`
+      → sync). The first SDK/BLE connect *after the cold boot* stalled at `onConnecting` (~2 min, no
+      success) while the Classic-BT/HFP link was up; a fresh connect recovered fully
+      (`onConnectSuccess` → `syncAllData onSuccess` → notify states). Likely a transient post-reboot BLE
+      hiccup — worth a follow-up to confirm the 60 s-backoff loop self-recovers a stalled `onConnecting`
+      (it retries on `DISCONNECTED`, but a wedged `CONNECTING` wouldn't trip that). Not reproduced on
+      normal (non-boot) reconnects, which were reliable all session.
+- [ ] **Background `WatchSyncWorker` sync / busy-guard:** **not exercised this session.** With the
+      always-on service holding the single GATT link, the worker no-ops by design (busy-guard,
+      source-verified); a clean test needs the service disabled (revoke notification access) then a
+      forced worker run. Deferred — lower priority now that always-on is verified.
+- [x] **Network egress (light check):** **PASS (light).** The only egress observed during connect/sync
+      was the dashboard upload (`--> POST https://srv1464866…:8443/api/widget/v1/watch/health` →
+      `<-- 201`); no Alexa/u-blox/Airoha/starcourse/other third-party host appeared in okhttp logs. A
+      full on-device packet capture (VpnService/tcpdump) is still the stronger check and remains the
+      open decision below; this run adds a data point that nothing unexpected egressed.
 
 ## Deferred Android build/test commands
 
@@ -211,17 +279,37 @@ Run on Fabian's real phone/watch before calling the feature done:
 
 Record results here:
 
-- [ ] Fresh install:
-- [ ] Force-stop VeryFit / single BLE owner:
-- [ ] Connect/bind:
-- [ ] Manual sync:
-- [ ] Periodic/service sync:
-- [ ] Dashboard upload:
-- [ ] Logcat privacy:
-- [ ] SDK DB persistence disabled / no `ido-watch.db` retained:
-- [ ] SDK encrypted SP relaunch/reconnect:
-- [ ] SDK file-log privacy:
-- [ ] Network capture:
+- [x] Fresh install: **PASS** — `./gradlew :app:installDebug` (install -r, data preserved) several times
+      this session on SM-G991B / Android 14; current build carries the W7 send-path fix.
+- [x] Force-stop VeryFit / single BLE owner: **PASS** — `am force-stop --user 0 com.watch.life` before
+      each connect; our app then owns the link (scan→connect→bind→sync succeeds).
+- [x] Connect/bind: **PASS** — auto-connect via `WatchConnectionService`; `onConnectSuccess … bound=true`,
+      function table cached, repeatable across the session.
+- [x] Manual/auto sync: **PASS** — `syncAllData onSuccess` each connect (activity/stress/body_energy/hrv
+      mapped; heart_rate_second delivered-but-dropped as documented).
+- [x] Periodic/service sync: **PASS (by design)** — the always-on service drives sync on connect + a 6 h
+      timer; `WatchSyncWorker` no-ops while the service holds the link (busy-guard, source-verified).
+- [x] Dashboard upload: **PASS (real sink)** — `--> POST https://srv1464866…:8443/api/widget/v1/watch/health`
+      → `<-- 201` → `uploaded 833 records (stored=833)`. okhttp lines present = not the fake offline sink.
+- [x] Logcat privacy: **PASS** — see Lane-D results; sends log `category/len` only, native content stream
+      gated off release in source.
+- [x] SDK DB persistence disabled / no `ido-watch.db` retained: **PASS** (SM-G991B / Android 14,
+      debug v0.1.0, 2026-06-28). `run-as … ls databases` shows only `dashboard-cache.db*` — no
+      `ido-watch.db`. Source: `isSaveDeviceDataToDB = false` (`IdoSdkWatchEngine.buildInitParam`).
+- [x] SDK encrypted SP relaunch/reconnect: **PASS**. SDK shared-prefs values are ciphertext —
+      `common_info.xml lastConnectedDeviceInfo`/`bindMacAddressList` and `bind_info_*.xml
+      bind_device_address` are all base64-encrypted; survived the 09:31 install-r relaunch and a
+      later sync (files re-read fine). Source: `isEncryptedSPData = true`. (Note: the watch MAC
+      appears in *filenames* `device_<MAC>.xml`/`bind_info_<MAC>.xml`, but those are app-private and
+      the stored *values* are encrypted.)
+- [x] SDK file-log privacy: **PASS (release gating verified in source; debug behaves as designed).**
+      `isEnableLog = BuildConfig.DEBUG`, `p.EnableLog(DEBUG, DEBUG, …)`, `ProtocolSetLogEnable(DEBUG)`,
+      `log_save_days = if (DEBUG) 3 else 0` → release builds write no `filesDir/ido-logs` and retain 0
+      days. On this *debug* build `ido-logs/` may exist (correct); during checks it was present
+      transiently then absent. Full release-build on-device confirmation still pending a release APK.
+- [~] Network capture: **light PASS** — only egress seen during connect/sync was the dashboard `201`
+      POST; no third-party host in okhttp logs. Full VpnService/tcpdump capture still recommended (see
+      Open decisions).
 - [ ] Blood-pressure + stress samples (if the watch has them) now appear in the Watch-screen "Last
       sync" counts **and** in the dashboard `watch_blood_pressure_readings` / `watch_stress_readings`
       tables (regression check for the composite-listener drop fix).

@@ -74,6 +74,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     /** Raw per-sync delivery tally (incl. callbacks we drop) for the Phase-2 support matrix. */
     private val diagnostics = WatchSyncDiagnostics()
 
+    // W7: the watch gates *display* of any pushed notice on a per-type "message notify state". Until
+    // that state is set to ALLOW for a type, the watch silently drops our V3MessageNotice/NewMessageInfo
+    // even though the SDK accepts the send. The stock VeryFit app pushes default ALLOW states on connect
+    // (RemindDataManager.sendDefaultNotificationState2Device → BLEManager.addMessageNotifyState(list,0,0)).
+    // We never sent config, so notices never displayed. Push ALLOW once per connected session. One-shot.
+    @Volatile
+    private var notifyStatesEnabled = false
+
     override fun init() {
         if (initialized) return
         synchronized(this) {
@@ -158,6 +166,47 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         beginScan()
     }
 
+    // Liveness-reset connect watchdog. The SDK can leave us stuck in the SCANNING/CONNECTING zone
+    // with no terminal callback: observed once after a cold boot the link sat ~2 min at onConnecting
+    // (Classic-BT/HFP up, BLE/GATT connect never completing) and recovered only on a manual relaunch.
+    // The always-on WatchConnectionService.maintain() only retries on DISCONNECTED, so a state stuck
+    // at CONNECTING leaves the link silently down until the app is reopened.
+    //
+    // Crucially (hardware-verified): after a drop the SDK runs its OWN internal auto-reconnect —
+    // cycling onConnectStart/onScanFinished every ≤~35s and recovering itself when the watch returns —
+    // WITHOUT ever calling our connect()/beginScan(). A watchdog armed only at our beginScan would
+    // miss that path entirely (a 12-min watch-off window sat at CONNECTING the whole time and never
+    // armed it). So instead of a fixed timeout we (re)arm on EVERY connect-progress callback from
+    // either path (see [noteConnectProgress]); the watchdog fires only when progress goes *silent*
+    // for CONNECT_STALL_MS while still SCANNING/CONNECTING — the genuine wedge. Healthy retry cycling
+    // keeps resetting it, so it never aborts a connect that's still making progress. On a true wedge
+    // it tears down the half-open attempt and routes through the SAME retry budget as a GATT-133
+    // failure; once the link is up (onConnectSuccess) it's cleared (bind() afterwards is user-gated).
+    private val connectWatchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectWatchdogRunnable = Runnable {
+        val state = _connectionState.value
+        if (targetMac == null ||
+            (state != WatchEngineConnectionState.SCANNING && state != WatchEngineConnectionState.CONNECTING)
+        ) {
+            return@Runnable // attempt already settled (connected/bound/disconnected) — nothing to do
+        }
+        Log.w(TAG, "connect watchdog: no progress for ${CONNECT_STALL_MS}ms at $state — aborting + retrying")
+        runCatching { BLEManager.stopScanDevices() }
+        runCatching { BLEManager.disConnect() }
+        handleConnectAttemptFailed("connect stall watchdog (silent ${CONNECT_STALL_MS}ms at $state)")
+    }
+
+    /**
+     * Mark connect progress and (re)arm the stall watchdog. Called from every connect-progress
+     * callback regardless of which path (our connect()/beginScan or the SDK's auto-reconnect) drives
+     * it; each call pushes the wedge deadline CONNECT_STALL_MS further out, so the watchdog fires
+     * only on true silence.
+     */
+    private fun noteConnectProgress() {
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
+        connectWatchdogHandler.postDelayed(connectWatchdogRunnable, CONNECT_STALL_MS)
+    }
+
     override fun connect(macAddress: String) {
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
@@ -170,9 +219,36 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     /** Start (or restart, for a GATT-133 retry) the scan→connect flow toward [targetMac]. */
     private fun beginScan() {
         functionTableCached = false
+        noteConnectProgress() // arm/refresh the stall watchdog for this attempt
         Log.i(TAG, "connect($targetMac) → scanning to find + bind")
         _connectionState.value = WatchEngineConnectionState.SCANNING
         BLEManager.startScanDevices()
+    }
+
+    /**
+     * A connect attempt failed to reach a live link — either the SDK reported [onConnectFailed]
+     * (typically a transient GATT-133 first-connect hiccup) or our connect watchdog tripped on a
+     * wedged/never-found attempt. Both share one bounded retry budget: re-scan up to
+     * [MAX_CONNECT_RETRIES] times with a short backoff, then surface a clean DISCONNECTED so callers
+     * (UI / worker / always-on service) see a terminal state and can decide whether to retry. Always
+     * clears the watchdog first so a queued timeout can't fire after we've already handled the failure.
+     */
+    private fun handleConnectAttemptFailed(context: String) {
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
+        if (targetMac != null && connectAttempts < MAX_CONNECT_RETRIES) {
+            connectAttempts++
+            Log.w(
+                TAG,
+                "$context — retry $connectAttempts/$MAX_CONNECT_RETRIES in ${CONNECT_RETRY_DELAY_MS}ms",
+            )
+            connectRetryHandler.removeCallbacks(connectRetryRunnable)
+            connectRetryHandler.postDelayed(connectRetryRunnable, CONNECT_RETRY_DELAY_MS)
+            return
+        }
+        Log.w(TAG, "$context — giving up after ${connectAttempts + 1} attempts")
+        connectAttempts = 0
+        _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+        listener?.onSyncFailed()
     }
 
     override fun disconnect() {
@@ -181,6 +257,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         pendingSyncAfterFunctionTable = false
         connectAttempts = 0
         connectRetryHandler.removeCallbacks(connectRetryRunnable)
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
         _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         BLEManager.disConnect()
     }
@@ -219,14 +296,55 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return false
         }
         return try {
-            // Mirror VeryFit's capability gate (MsgNotificationHelper.sendNotificationDevice): devices
-            // flagged ex_table_main10_v3_notify_msg take the V3 message-notice path; the rest take the
-            // newer NewMessageInfo path. Each enumeration has its own per-category type codes (see
-            // [v3TypeFor]/[newTypeFor]), so an SMS/call renders as such on the watch. The function
-            // table is fetched once per connected session (see [syncHealth]); if it hasn't arrived yet
-            // we fall back to the newer path (the common case).
+            // An incoming call uses the watch's dedicated call API (renders the native answer/reject
+            // screen), NOT the message path — this is how VeryFit does it
+            // (MsgNotificationHelper.sendCallReminder2DeviceNew → setIncomingCallInfo). Pair with
+            // [stopIncomingCall] when the call ends.
+            // NOTE (hardware-verified, Active 4 Pro): this watch is *also* bonded as a Bluetooth
+            // Hands-Free (HFP) device, so the wrist answer/reject is actually executed by Android's
+            // telephony stack over HFP — it never reaches [deviceControlCallBack] / the app's
+            // [WatchControlEvent] path (that path stays as a fallback for watches that deliver call
+            // control over the IDO GATT channel instead of HFP).
+            if (notification.category == WatchNotificationCategory.CALL) {
+                val callInfo = com.ido.ble.protocol.model.IncomingCallInfo().apply {
+                    name = notification.appName.ifBlank { " " }
+                    phoneNumber = ""
+                }
+                Log.i(TAG, "sendNotification (incoming call) len=${notification.body.length}")
+                BLEManager.setIncomingCallInfo(callInfo)
+                return true
+            }
+            // Mirror VeryFit's capability gate (MsgNotificationHelper.formNotificationAndSend2Device):
+            //  1. Watches flagged V3_support_set_v3_notify_add_app_name take the NEW NotificationPara
+            //     path (`isSupportV3Notify()` → sendNotification2DeviceV3). The Active 4 Pro is one of
+            //     these — its firmware *ignores* the legacy setV3MessageNotice, which is why mirroring
+            //     silently failed on hardware. The notice carries the app name in `items` itself, so we
+            //     don't need the full notice-app/icon DB push for the standard SMS/message types.
+            //  2. Otherwise: ex_table_main10_v3_notify_msg → legacy V3MessageNotice; else NewMessageInfo.
+            // The function table is fetched once per connected session (see [syncHealth]); if it hasn't
+            // arrived yet we fall back to the newer message path (the common case).
+            val useNotificationPara = cachedFunctionInfo?.V3_support_set_v3_notify_add_app_name == true
             val useOldV3 = cachedFunctionInfo?.ex_table_main10_v3_notify_msg == true
-            if (useOldV3) {
+            if (useNotificationPara) {
+                val para = com.ido.ble.protocol.model.NotificationPara().apply {
+                    notify_type = v3TypeFor(notification.category)
+                    contact = notification.appName
+                    msg_data = notification.body
+                    phone_number = ""
+                    evt_type = 1 // VeryFit sends evt_type=1 for an incoming/new notification
+                    // The app-name list the watch renders; one fallback entry mirrors VeryFit's
+                    // "no name list → default name" branch (language index 1, the app/sender name).
+                    items = listOf(
+                        com.ido.ble.protocol.model.NotificationPara.AppNames().apply {
+                            language = 1
+                            name = notification.appName
+                        },
+                    )
+                    app_items_len = items.size
+                }
+                Log.i(TAG, "sendNotification (NotificationPara) category=${notification.category} len=${notification.body.length}")
+                BLEManager.sendNotification(para)
+            } else if (useOldV3) {
                 @Suppress("DEPRECATION")
                 val notice = com.ido.ble.protocol.model.V3MessageNotice().apply {
                     evtType = v3TypeFor(notification.category)
@@ -260,6 +378,42 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "sendNotification failed", t)
             false
         }
+    }
+
+    override fun stopIncomingCall() {
+        if (!isConnected()) return
+        runCatching {
+            Log.i(TAG, "stopIncomingCall → setStopInComingCall")
+            BLEManager.setStopInComingCall()
+        }.onFailure { Log.w(TAG, "stopIncomingCall failed", it) }
+    }
+
+    /**
+     * Enable the watch's per-type message-notify state so it will actually *display* the notices we
+     * push (W7). Mirrors VeryFit's `RemindDataManager.sendDefaultNotificationState2Device`, which sends
+     * a list of [MessageNotifyState] with `notify_state = ALLOW` via `addMessageNotifyState(list, 0, 0)`
+     * on connect. Without it the watch silently drops every V3MessageNotice/NewMessageInfo even though
+     * the SDK accepts the send. Pushed once per connected session (after a sync, so it never interleaves
+     * with the order-sensitive data-pull commands) for the categories we mirror.
+     */
+    private fun enableMessageNotifyStates() {
+        if (notifyStatesEnabled || !isConnected()) return
+        runCatching {
+            val states = listOf(
+                WatchNotificationCategory.CALL,
+                WatchNotificationCategory.MISSED_CALL,
+                WatchNotificationCategory.SMS,
+                WatchNotificationCategory.GENERIC,
+            ).map { category ->
+                com.ido.ble.protocol.model.MessageNotifyState().apply {
+                    evt_type = v3TypeFor(category)
+                    notify_state = com.ido.ble.protocol.model.NotifyType.ALLOW
+                }
+            }
+            BLEManager.addMessageNotifyState(states, 0, 0)
+            notifyStatesEnabled = true
+            Log.i(TAG, "enabled message notify states (ALLOW) for ${states.size} categories")
+        }.onFailure { Log.w(TAG, "enableMessageNotifyStates failed", it) }
     }
 
     private fun startSync() {
@@ -303,9 +457,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     // ── Scan → connect → bind lifecycle ──────────────────────────────────────────────
 
     private val scanCallBack = object : ScanCallBack.ICallBack {
-        override fun onStart() { Log.i(TAG, "scan started (target=$targetMac)") }
-        override fun onScanFinished() { Log.i(TAG, "scan finished") }
+        override fun onStart() { noteConnectProgress(); Log.i(TAG, "scan started (target=$targetMac)") }
+        override fun onScanFinished() { noteConnectProgress(); Log.i(TAG, "scan finished") }
         override fun onFindDevice(device: BLEDevice?) {
+            noteConnectProgress()
             val addr = device?.mDeviceAddress ?: return
             Log.d(TAG, "found '${device.mDeviceName}' $addr rssi=${device.mRssi}")
             if (addr.equals(targetMac, ignoreCase = true)) {
@@ -319,17 +474,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private val connectCallBack = object : ConnectCallBack.ICallBack {
         override fun onConnectStart(mac: String?) {
+            noteConnectProgress()
             Log.i(TAG, "onConnectStart $mac")
             _connectionState.value = WatchEngineConnectionState.CONNECTING
         }
-        override fun onConnecting(mac: String?) { Log.i(TAG, "onConnecting $mac") }
-        override fun onRetry(times: Int, mac: String?) { Log.i(TAG, "onRetry $times $mac") }
+        override fun onConnecting(mac: String?) { noteConnectProgress(); Log.i(TAG, "onConnecting $mac") }
+        override fun onRetry(times: Int, mac: String?) { noteConnectProgress(); Log.i(TAG, "onRetry $times $mac") }
 
         override fun onConnectSuccess(mac: String?) {
             // Link is up — clear the GATT-133 retry budget so any *later* transient drop gets a
-            // fresh set of attempts of its own.
+            // fresh set of attempts of its own, and disarm the connect watchdog (past the wedge window).
             connectAttempts = 0
             connectRetryHandler.removeCallbacks(connectRetryRunnable)
+            connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             val bound = runCatching { BLEManager.isBind() }.getOrDefault(false)
             Log.i(TAG, "onConnectSuccess $mac bound=$bound")
             if (!bound) {
@@ -361,24 +518,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
-            // GATT-133 mitigation: first-connect to this family often fails once transiently. Retry
-            // the scan→connect up to MAX_CONNECT_RETRIES times with a short backoff before surfacing
-            // a failure to the UI/worker, instead of dropping the whole sync on the first hiccup.
-            if (targetMac != null && connectAttempts < MAX_CONNECT_RETRIES) {
-                connectAttempts++
-                Log.w(
-                    TAG,
-                    "onConnectFailed reason=$reason mac=$mac — retry $connectAttempts/$MAX_CONNECT_RETRIES " +
-                        "in ${CONNECT_RETRY_DELAY_MS}ms (transient GATT-133 mitigation)",
-                )
-                connectRetryHandler.removeCallbacks(connectRetryRunnable)
-                connectRetryHandler.postDelayed(connectRetryRunnable, CONNECT_RETRY_DELAY_MS)
-                return
-            }
-            Log.w(TAG, "onConnectFailed reason=$reason mac=$mac — giving up after ${connectAttempts + 1} attempts")
-            connectAttempts = 0
-            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
-            listener?.onSyncFailed()
+            handleConnectAttemptFailed("onConnectFailed reason=$reason mac=$mac")
         }
 
         override fun onConnectBreak(mac: String?) {
@@ -386,6 +526,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             functionTableCached = false
             cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
+            notifyStatesEnabled = false
+            // The link is down for good; a wedge-watchdog from this attempt no longer applies.
+            connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
@@ -479,6 +622,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.i(TAG, "syncAllData onSuccess")
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
+            enableMessageNotifyStates()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
@@ -487,6 +631,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.w(TAG, "syncAllData onFailed: $type")
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
+            enableMessageNotifyStates()
             listener?.onSyncFailed()
         }
     }
@@ -746,31 +891,81 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         // V3 "heart rate second" record carries the Active 4 Pro's intraday HR (the v2 daily-HR path
-        // never fires here). silentHR reads 0; the real data is the items[] series of bare HR values
-        // with no per-sample time. Before mapping it (would need a new point metric + dashboard
-        // column), confirm the sample interval. Probe logs date/startTime/count + first/last values
-        // and any hr_data high/low entries (those DO carry hour:minute) so the spacing can be pinned
-        // from real evidence. Debug-gated (the values are decoded health data). Mapping deferred.
+        // never fires here). The full downstream pipeline IS wired — domain [WatchHeartRateReading],
+        // [WatchHealthListener.onHeartRateReading], the uploader buffer, [WatchHeartRateReadingDto],
+        // the dashboard `watch_heart_rate_readings` table + route, and the Watch-screen count.
+        //
+        // Per-item wall-clock: each [HealthHeartRateSecondItem] carries `heartRateVal` + `offset`. The
+        // offset is NOT an absolute time — it is a **delta in seconds since the previous item**, so the
+        // wall-clock is the RUNNING SUM of offsets across the whole list:
+        //   cum += item.offset ;  recordedAt = midnight(year, month, day) + cum seconds   (startTime=0, unused)
+        // Gaps wider than a byte are split into `offset=255, heartRateVal=0` continuation sentinels
+        // (a long unworn stretch shows up as a run of consecutive 255s); the hr=0 entries fail the bpm
+        // guard so they emit nothing, but their offset MUST still accumulate or every later sample drifts.
+        //
+        // This is HARDWARE-MEASURED (2026-06-29), not the earlier `getOffset` guess — that oracle read
+        // was the manual one-click-measure WRITER path, which is absolute; the device-SYNC payload is
+        // delta-encoded (offsetRange=[0..255], byte deltas). Verified against the raw `ido-logs` JSON
+        // with two independent wall-clock anchors: a full day (2026-06-28) accumulates to 86109 s → last
+        // sample 23:55:09 (≈ a 24 h span), and the partial current day (2026-06-29) accumulates to
+        // 38721 s → last sample 10:45:21, ~4 min before the 10:49:40 sync. Both pin the unit to seconds.
+        // Probe kept below for regression visibility. Debug-gated (decoded data).
         override fun onGetHealthHeartRateSecondData(
             data: com.ido.ble.data.manage.database.HealthHeartRateSecond?,
             isLast: Boolean,
         ) {
             if (data == null || data.year == 0) return
-            val itemCount = data.items?.size ?: 0
-            diagnostics.record(WatchSyncDiagnostics.HEART_RATE_SECOND, parentRecords = 1, itemSamples = itemCount)
+            val items = data.items ?: emptyList()
+            val itemCount = items.size
+            // offset is a per-item delta in seconds; accumulate over ALL items, emit on plausible bpm.
+            var mapped = 0
+            var cum = 0
+            items.forEach { item ->
+                cum += item.offset
+                if (item.heartRateVal !in 1..250) return@forEach
+                val cumSeconds = cum
+                runCatching {
+                    WatchTime.localDateTime(data.year, data.month, data.day, cumSeconds)
+                }.onSuccess { ts ->
+                    listener?.onHeartRateReading(WatchHeartRateReading(recordedAt = ts, bpm = item.heartRateVal))
+                    mapped++
+                }
+            }
+            diagnostics.record(
+                WatchSyncDiagnostics.HEART_RATE_SECOND,
+                parentRecords = 1,
+                itemSamples = itemCount,
+                mappedReadings = mapped,
+            )
             if (BuildConfig.DEBUG) {
-                val vals = data.items?.map { it.heartRateVal } ?: emptyList()
+                val vals = items.map { it.heartRateVal }
+                val offsets = items.map { it.offset }
                 val nonZero = vals.count { it > 0 }
                 val firstNonZero = vals.indexOfFirst { it > 0 }
                 val lastNonZero = vals.indexOfLast { it > 0 }
-                val hrTimes = data.hr_data?.take(4)?.map { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
+                // Per-item offset is the field never logged before — the key to the timestamp model.
+                // Log head/tail as offset=hr pairs, the offset range, and the dominant offset step.
+                val head = items.take(6).joinToString(",") { "${it.offset}=${it.heartRateVal}" }
+                val tail = items.takeLast(6).joinToString(",") { "${it.offset}=${it.heartRateVal}" }
+                val steps = offsets.zipWithNext { a, b -> b - a }
+                val stepHisto = steps.groupingBy { it }.eachCount().entries
+                    .sortedByDescending { it.value }.take(4).joinToString(",") { "${it.key}x${it.value}" }
+                val fiveMin = data.five_min_data ?: emptyList()
+                val fiveHead = fiveMin.take(6).joinToString(",")
+                val intervals = data.hrInterval?.take(4)?.joinToString(",") { "m${it.minute}/t${it.threshold}" }
+                // hr_data high/low entries DO carry wall-clock hour:minute — the ground truth to align
+                // the offset→time mapping against. Log all of them (typically a handful).
+                val hrTimes = data.hr_data?.joinToString(",") { "${it.hour}:${it.minute}=${it.heart_rate}(t${it.type})" }
                 Log.d(
                     TAG,
                     "heartRateSecond probe: date=${WatchTime.ymd(data.year, data.month, data.day)} " +
                         "startTime=${data.startTime} items=$itemCount nonZero=$nonZero " +
                         "firstNZidx=$firstNonZero lastNZidx=$lastNonZero " +
-                        "fiveMin=${data.five_min_data?.size ?: 0} hrDataCount=${data.hr_data_count} " +
-                        "silentHR=${data.silentHR} hrData=$hrTimes",
+                        "offsetRange=[${offsets.minOrNull()}..${offsets.maxOrNull()}] stepHisto=[$stepHisto] " +
+                        "fiveMin=${fiveMin.size}(avg=${data.five_min_avg_data},max=${data.five_min_max_data},min=${data.five_min_min_data}) fiveHead=[$fiveHead] " +
+                        "hrInterval=${data.hrInterval?.size ?: 0}[$intervals] hrDataCount=${data.hr_data_count} " +
+                        "silentHR=${data.silentHR}\n" +
+                        "  itemsHead=[$head]\n  itemsTail=[$tail]\n  hrData=[$hrTimes]",
                 )
             }
         }
@@ -825,6 +1020,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             .mapNotNull { m -> m.functionTableField?.let { "${m.diagnosticsKey}=${readFunctionFlag(it)}" } }
             .joinToString(", ")
         Log.i(TAG, "function table (health flags): $flags")
+        // The notification-send path this watch needs (see [sendNotification]); logged once per connect.
+        Log.i(
+            TAG,
+            "W7 notify path: v3_add_app_name=${readFunctionFlag("V3_support_set_v3_notify_add_app_name")}, " +
+                "ex_v3_notify_msg=${readFunctionFlag("ex_table_main10_v3_notify_msg")}",
+        )
     }
 
     /**
@@ -972,6 +1173,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) { logPrivateRecord("BODY_ENERGY", reading) }
         override fun onBloodPressureReading(reading: WatchBloodPressureReading) { logPrivateRecord("BLOOD_PRESSURE", reading) }
         override fun onStressReading(reading: WatchStressReading) { logPrivateRecord("STRESS", reading) }
+        override fun onHeartRateReading(reading: WatchHeartRateReading) { logPrivateRecord("HEART_RATE_SECOND", reading) }
         override fun onSyncProgress(percent: Int) { Log.i(TAG, "sync progress $percent%") }
         override fun onSyncComplete() { Log.i(TAG, "sync complete") }
         override fun onSyncFailed() { Log.w(TAG, "sync failed") }
@@ -987,6 +1189,17 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
         const val MAX_CONNECT_RETRIES = 2
         const val CONNECT_RETRY_DELAY_MS = 2_000L
+
+        /**
+         * How long the connect may go with NO progress callback while still SCANNING/CONNECTING
+         * before the stall watchdog declares it wedged and forces a teardown+retry. It's a *silence*
+         * window, reset on every progress callback (see [noteConnectProgress]) — so it must sit above
+         * the SDK's healthy retry cadence: hardware showed onConnectStart/onScanFinished landing every
+         * ≤~35s during a watch-off auto-reconnect, so 90s gives ~2.5× margin and only a genuine
+         * (callback-silent) wedge trips it. A normal connect reaches onConnectSuccess in seconds and
+         * clears the watchdog long before this; bind() happens afterwards and is outside the window.
+         */
+        const val CONNECT_STALL_MS = 90_000L
 
         /** Category → NewMessageInfo type (modern path). No incoming-call type exists here, so a live
          *  CALL falls back to GENERIC and relies on the body text ("Incoming call · …"). */

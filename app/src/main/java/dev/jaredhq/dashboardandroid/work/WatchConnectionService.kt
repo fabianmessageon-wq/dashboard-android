@@ -95,6 +95,9 @@ class WatchConnectionService : Service() {
                 }
             }
             // Suspend until the link drops (stays suspended forever while it's up), then back off.
+            // A connect that wedges mid-attempt (stuck CONNECTING/SCANNING with no SDK callback) no
+            // longer hangs this forever: the engine's connect watchdog forces such an attempt to
+            // DISCONNECTED, so this resumes and the loop reconnects. (See IdoSdkWatchEngine.)
             engine.connectionState.first { it == WatchEngineConnectionState.DISCONNECTED }
             delay(RECONNECT_BACKOFF_MS)
         }

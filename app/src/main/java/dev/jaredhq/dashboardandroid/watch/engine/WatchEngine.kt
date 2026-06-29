@@ -93,6 +93,14 @@ interface WatchEngine {
      * support). Default: a no-op returning false, so non-SDK engines compile unchanged.
      */
     fun sendNotification(notification: WatchNotification): Boolean = false
+
+    /**
+     * Tell the watch the incoming call is over (answered elsewhere, ended, or the call notification
+     * was dismissed) so it stops showing the incoming-call screen (W7). Pairs with a [CALL][
+     * WatchNotificationCategory.CALL] [sendNotification], which routes through the watch's dedicated
+     * call API. Default: a no-op, so non-SDK engines compile unchanged.
+     */
+    fun stopIncomingCall() {}
 }
 
 /**

@@ -13,6 +13,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.UploadingWatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
@@ -70,10 +71,11 @@ class UploadingWatchHealthListenerTest {
     private val spo2 = WatchSpo2Reading(recordedAt = "2026-06-24 10:00:00", percent = 97)
     private val bp = WatchBloodPressureReading(recordedAt = "2026-06-24 10:01:00", systolic = 120, diastolic = 80)
     private val stress = WatchStressReading(recordedAt = "2026-06-24 10:02:00", stressScore = 40)
+    private val hr = WatchHeartRateReading(recordedAt = "2026-06-24 10:03:00", bpm = 72)
 
     @Test
     fun completeFlushesAndReportsSuccessCountsIncludingBpAndStress() = runTest {
-        val client = StubClient { WatchHealthUploadResult(accepted = true, storedCount = 3) }
+        val client = StubClient { WatchHealthUploadResult(accepted = true, storedCount = 4) }
         val outcomes = mutableListOf<WatchUploadOutcome>()
         val listener = UploadingWatchHealthListener(
             repository = repoOver(client),
@@ -85,20 +87,22 @@ class UploadingWatchHealthListenerTest {
         listener.onSpo2Reading(spo2)
         listener.onBloodPressureReading(bp)
         listener.onStressReading(stress)
+        listener.onHeartRateReading(hr)
         listener.onSyncComplete()
         advanceUntilIdle()
 
         val outcome = outcomes.single()
         assertTrue(outcome.succeeded)
-        assertEquals(3, outcome.sentCount)
-        assertEquals(3, outcome.storedCount)
+        assertEquals(4, outcome.sentCount)
+        assertEquals(4, outcome.storedCount)
         assertNull(outcome.error)
 
-        // The blood-pressure + stress buffers (the previously-dropped metrics) reach the batch.
+        // The blood-pressure + stress + intraday-HR buffers (previously-dropped metrics) reach the batch.
         val batch = requireNotNull(client.lastBatch)
         assertEquals(1, batch.bloodPressureReadings.size)
         assertEquals(1, batch.stressReadings.size)
-        assertEquals(3, batch.recordCount)
+        assertEquals(1, batch.heartRateReadings.size)
+        assertEquals(4, batch.recordCount)
     }
 
     @Test

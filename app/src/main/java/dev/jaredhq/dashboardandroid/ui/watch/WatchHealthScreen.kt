@@ -255,6 +255,7 @@ private fun LastSyncCard(summary: WatchSyncSummary) {
                 CountRow("Sleep sessions", c.sleepSessions)
                 CountRow("Activity days", c.activityDays)
                 CountRow("Heart-rate days", c.heartRateDays)
+                CountRow("Heart-rate samples", c.heartRate)
                 CountRow("SpO₂ samples", c.spo2)
                 CountRow("HRV samples", c.hrv)
                 CountRow("Respiratory samples", c.respiratory)

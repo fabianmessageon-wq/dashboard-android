@@ -9,6 +9,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateDay
+import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchNotification
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
@@ -39,11 +40,12 @@ data class WatchSyncCounts(
     val bodyEnergy: Int = 0,
     val bloodPressure: Int = 0,
     val stress: Int = 0,
+    val heartRate: Int = 0,
 ) {
     val total: Int
         get() = activityDays + heartRateDays + sleepSessions + workouts +
             spo2 + hrv + respiratory + temperature + bodyEnergy +
-            bloodPressure + stress
+            bloodPressure + stress + heartRate
 }
 
 /** Result of the dashboard upload that follows a sync, for the "Last sync" card. */
@@ -115,6 +117,7 @@ class WatchHealthViewModel(
         override fun onBodyEnergyReading(reading: WatchBodyEnergyReading) = bump { it.copy(bodyEnergy = it.bodyEnergy + 1) }
         override fun onBloodPressureReading(reading: WatchBloodPressureReading) = bump { it.copy(bloodPressure = it.bloodPressure + 1) }
         override fun onStressReading(reading: WatchStressReading) = bump { it.copy(stress = it.stress + 1) }
+        override fun onHeartRateReading(reading: WatchHeartRateReading) = bump { it.copy(heartRate = it.heartRate + 1) }
         override fun onSyncComplete() = finishSync(succeeded = true)
         override fun onSyncFailed() = finishSync(succeeded = false)
     }
