@@ -20,6 +20,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthListener
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
+import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchSongImportPreparer
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +88,9 @@ object ServiceLocator {
     lateinit var watchMusicController: WatchMusicController
         private set
 
+    lateinit var watchSongImportPreparer: AndroidWatchSongImportPreparer
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -139,6 +143,7 @@ object ServiceLocator {
                 engine = watchEngine,
                 scope = watchMusicScope,
             )
+            watchSongImportPreparer = AndroidWatchSongImportPreparer(appContext)
 
             initialized = true
         }

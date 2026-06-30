@@ -20,17 +20,30 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +53,10 @@ import androidx.compose.ui.unit.dp
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 import dev.jaredhq.dashboardandroid.notify.NotificationAccess
 import dev.jaredhq.dashboardandroid.watch.engine.WatchPlaybackState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryStatus
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryMutationStatus
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicTransferStatus
+import dev.jaredhq.dashboardandroid.watch.engine.WATCH_MUSIC_FOLDER_LIMIT
 import dev.jaredhq.dashboardandroid.work.WatchConnectionService
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
@@ -66,6 +83,14 @@ fun WatchHealthScreen(
     onSendTestNotification: () -> Unit,
     onNotificationHintShown: () -> Unit,
     onPhoneMusicEnabledChange: (Boolean) -> Unit,
+    onWatchSongSelected: (android.net.Uri?) -> Unit,
+    onRefreshWatchMusic: () -> Unit,
+    onCancelWatchSongImport: () -> Unit,
+    onDeleteWatchSong: (Int) -> Unit,
+    onCreateWatchMusicFolder: (String) -> Unit,
+    onUpdateWatchMusicFolder: (Int, String, List<Int>) -> Unit,
+    onDeleteWatchMusicFolder: (Int) -> Unit,
+    onSongPickerErrorShown: () -> Unit,
     onPermissionsGranted: () -> Unit,
     onPermissionsDenied: () -> Unit,
 ) {
@@ -86,6 +111,10 @@ fun WatchHealthScreen(
     ) { results ->
         if (results.values.all { it }) onPermissionsGranted() else onPermissionsDenied()
     }
+    val songPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+        onResult = onWatchSongSelected,
+    )
     LaunchedEffect(Unit) {
         val allGranted = permissions.all {
             context.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -104,6 +133,14 @@ fun WatchHealthScreen(
             onPhoneMusicEnabledChange(enabled)
             WatchConnectionService.syncRunState(context)
         },
+        onImportWatchSong = { songPicker.launch(arrayOf("audio/mpeg", "audio/*")) },
+        onRefreshWatchMusic = onRefreshWatchMusic,
+        onCancelWatchSongImport = onCancelWatchSongImport,
+        onDeleteWatchSong = onDeleteWatchSong,
+        onCreateWatchMusicFolder = onCreateWatchMusicFolder,
+        onUpdateWatchMusicFolder = onUpdateWatchMusicFolder,
+        onDeleteWatchMusicFolder = onDeleteWatchMusicFolder,
+        onSongPickerErrorShown = onSongPickerErrorShown,
         onOpenNotificationAccess = {
             context.startActivity(NotificationAccess.settingsIntent())
         },
@@ -119,6 +156,14 @@ private fun WatchHealthContent(
     onSendTestNotification: () -> Unit = {},
     onNotificationHintShown: () -> Unit = {},
     onPhoneMusicEnabledChange: (Boolean) -> Unit = {},
+    onImportWatchSong: () -> Unit = {},
+    onRefreshWatchMusic: () -> Unit = {},
+    onCancelWatchSongImport: () -> Unit = {},
+    onDeleteWatchSong: (Int) -> Unit = {},
+    onCreateWatchMusicFolder: (String) -> Unit = {},
+    onUpdateWatchMusicFolder: (Int, String, List<Int>) -> Unit = { _, _, _ -> },
+    onDeleteWatchMusicFolder: (Int) -> Unit = {},
+    onSongPickerErrorShown: () -> Unit = {},
     onOpenNotificationAccess: () -> Unit = {},
 ) {
     Column(
@@ -150,6 +195,27 @@ private fun WatchHealthContent(
             onOpenNotificationAccess = onOpenNotificationAccess,
         )
 
+        if (state.musicCapabilities.onboardMusic) {
+            OnboardMusicCard(
+                state = state,
+                onImport = onImportWatchSong,
+                onRefresh = onRefreshWatchMusic,
+                onCancel = onCancelWatchSongImport,
+                onDelete = onDeleteWatchSong,
+                onCreateFolder = onCreateWatchMusicFolder,
+                onUpdateFolder = onUpdateWatchMusicFolder,
+                onDeleteFolder = onDeleteWatchMusicFolder,
+            )
+        }
+
+        state.songPickerError?.let { error ->
+            LaunchedEffect(error) {
+                kotlinx.coroutines.delay(4_000)
+                onSongPickerErrorShown()
+            }
+            BannerCard(error, error = true)
+        }
+
         // W7: once connected, allow pushing a sample notification to the watch face to verify the
         // message path on-device. Hidden while syncing (the single GATT link is busy).
         if (state.connection == CONNECTED) {
@@ -176,6 +242,329 @@ private fun WatchHealthContent(
 
         Spacer(Modifier.height(8.dp))
     }
+}
+
+@Composable
+private fun OnboardMusicCard(
+    state: WatchHealthUiState,
+    onImport: () -> Unit,
+    onRefresh: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: (Int) -> Unit,
+    onCreateFolder: (String) -> Unit,
+    onUpdateFolder: (Int, String, List<Int>) -> Unit,
+    onDeleteFolder: (Int) -> Unit,
+) {
+    val library = state.watchMusicLibrary
+    val transfer = state.watchMusicTransfer
+    var pendingDeleteId by remember { mutableStateOf<Int?>(null) }
+    var pendingDeleteFolderId by remember { mutableStateOf<Int?>(null) }
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+    var editingFolderId by remember { mutableStateOf<Int?>(null) }
+    var editingFolderName by remember { mutableStateOf("") }
+    var editingMusicIds by remember { mutableStateOf(setOf<Int>()) }
+    val mutation = state.watchMusicLibraryMutation
+    val canMutate = state.connection == CONNECTED && !state.syncing && !transfer.active && !mutation.active &&
+        library.status == WatchMusicLibraryStatus.READY && !state.preparingSong
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(Icons.Filled.MusicNote, contentDescription = null)
+                Column(Modifier.weight(1f)) {
+                    Text("Music stored on watch", style = MaterialTheme.typography.titleMedium)
+                    library.storage?.let { storage ->
+                        Text(
+                            "${formatBytes(storage.freeBytes)} free of ${formatBytes(storage.totalBytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onImport, enabled = canMutate, modifier = Modifier.weight(1f)) {
+                    Text(if (state.preparingSong) "Preparing…" else "Import MP3")
+                }
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = state.connection == CONNECTED && !state.syncing &&
+                        !transfer.active && !mutation.active,
+                ) { Text("Refresh") }
+            }
+
+            when (transfer.status) {
+                WatchMusicTransferStatus.RESERVING -> {
+                    Text("Reserving space on watch…")
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                        Text("Cancel import")
+                    }
+                }
+                WatchMusicTransferStatus.TRANSFERRING -> {
+                    val percent = transfer.progressPercent
+                    Text(if (percent == null) "Transferring over BLE…" else "Transferring over BLE… $percent%")
+                    if (percent == null) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { percent / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                        Text("Cancel transfer")
+                    }
+                }
+                WatchMusicTransferStatus.CLEANING_UP -> Text("Cleaning up…")
+                WatchMusicTransferStatus.SUCCEEDED -> Text(
+                    "Transfer complete.",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                WatchMusicTransferStatus.FAILED -> Text(
+                    transfer.error ?: "Transfer failed. Select the file again to retry.",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                WatchMusicTransferStatus.CANCELLED -> Text("Transfer cancelled.")
+                WatchMusicTransferStatus.IDLE -> Unit
+            }
+
+            when (mutation.status) {
+                WatchMusicLibraryMutationStatus.CREATING -> Text("Creating playlist…")
+                WatchMusicLibraryMutationStatus.UPDATING -> Text("Updating playlist…")
+                WatchMusicLibraryMutationStatus.DELETING -> Text("Deleting playlist…")
+                WatchMusicLibraryMutationStatus.SUCCEEDED -> Text(
+                    "Playlist updated.",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                WatchMusicLibraryMutationStatus.FAILED -> Text(
+                    mutation.error ?: "Playlist operation failed.",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                WatchMusicLibraryMutationStatus.IDLE -> Unit
+            }
+
+            when (library.status) {
+                WatchMusicLibraryStatus.LOADING -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text("Reading watch library…", style = MaterialTheme.typography.bodySmall)
+                }
+                WatchMusicLibraryStatus.ERROR -> Text(
+                    library.error ?: "Couldn't read the watch library.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                WatchMusicLibraryStatus.READY -> {
+                    if (library.songs.isEmpty()) {
+                        Text("No songs stored on the watch.", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        library.songs.forEach { song ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(song.fileName, style = MaterialTheme.typography.bodyMedium)
+                                    val detail = listOf(song.artist, formatBytes(song.sizeBytes))
+                                        .filter { it.isNotBlank() }
+                                        .joinToString(" · ")
+                                    Text(detail, style = MaterialTheme.typography.labelSmall)
+                                }
+                                IconButton(
+                                    onClick = { pendingDeleteId = song.musicId },
+                                    enabled = canMutate,
+                                ) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete song")
+                                }
+                            }
+                        }
+                    }
+                }
+                WatchMusicLibraryStatus.UNAVAILABLE -> Text(
+                    "Connect the watch to load its music library.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (library.status == WatchMusicLibraryStatus.READY) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Playlists", style = MaterialTheme.typography.titleSmall)
+                    TextButton(
+                        onClick = {
+                            newFolderName = ""
+                            showCreateFolder = true
+                        },
+                        enabled = canMutate && library.folders.size < WATCH_MUSIC_FOLDER_LIMIT,
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Text("New")
+                    }
+                }
+                if (library.folders.isEmpty()) {
+                    Text("No playlists on the watch.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    library.folders.forEach { folder ->
+                        val songCount = folder.musicIds.size
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(folder.name, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "$songCount ${if (songCount == 1) "song" else "songs"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    editingFolderName = folder.name
+                                    editingMusicIds = folder.musicIds.toSet()
+                                    editingFolderId = folder.folderId
+                                },
+                                enabled = canMutate,
+                            ) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Edit playlist")
+                            }
+                            IconButton(
+                                onClick = { pendingDeleteFolderId = folder.folderId },
+                                enabled = canMutate,
+                            ) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete playlist")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pendingDeleteId?.let { musicId ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("Delete song from watch?") },
+            text = { Text("This removes the onboard copy from the watch.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeleteId = null
+                    onDelete(musicId)
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showCreateFolder) {
+        AlertDialog(
+            onDismissRequest = { showCreateFolder = false },
+            title = { Text("New watch playlist") },
+            text = {
+                OutlinedTextField(
+                    value = newFolderName,
+                    onValueChange = { newFolderName = it },
+                    label = { Text("Playlist name") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCreateFolder = false
+                        onCreateFolder(newFolderName)
+                    },
+                    enabled = newFolderName.isNotBlank(),
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateFolder = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    editingFolderId?.let { folderId ->
+        AlertDialog(
+            onDismissRequest = { editingFolderId = null },
+            title = { Text("Edit watch playlist") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editingFolderName,
+                        onValueChange = { editingFolderName = it },
+                        label = { Text("Playlist name") },
+                        singleLine = true,
+                    )
+                    if (library.songs.isEmpty()) {
+                        Text("Import a song to add it to this playlist.")
+                    } else {
+                        library.songs.forEach { song ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Checkbox(
+                                    checked = song.musicId in editingMusicIds,
+                                    onCheckedChange = { checked ->
+                                        editingMusicIds = if (checked) editingMusicIds + song.musicId
+                                        else editingMusicIds - song.musicId
+                                    },
+                                )
+                                Text(song.fileName, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        editingFolderId = null
+                        onUpdateFolder(folderId, editingFolderName, editingMusicIds.toList())
+                    },
+                    enabled = editingFolderName.isNotBlank(),
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingFolderId = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    pendingDeleteFolderId?.let { folderId ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteFolderId = null },
+            title = { Text("Delete playlist from watch?") },
+            text = { Text("Songs stay on the watch; only the playlist is removed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeleteFolderId = null
+                    onDeleteFolder(folderId)
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteFolderId = null }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    val mib = bytes.coerceAtLeast(0) / (1024.0 * 1024.0)
+    return if (mib >= 10) "%.0f MiB".format(mib) else "%.1f MiB".format(mib)
 }
 
 @Composable

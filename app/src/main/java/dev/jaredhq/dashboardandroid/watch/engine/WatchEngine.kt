@@ -64,6 +64,14 @@ interface WatchEngine {
     /** Music feature flags for the connected watch; unknown until its function table arrives. */
     val musicCapabilities: StateFlow<WatchMusicCapabilities>
 
+    /** On-watch MP3 library and storage. */
+    val watchMusicLibrary: StateFlow<WatchMusicLibraryState>
+
+    /** Current onboard-song reservation/transfer/cleanup lifecycle. */
+    val watchMusicTransfer: StateFlow<WatchMusicTransferState>
+
+    val watchMusicLibraryMutation: StateFlow<WatchMusicLibraryMutationState>
+
     /**
      * Current connection lifecycle, for the UI to observe. Starts at
      * [WatchEngineConnectionState.DISCONNECTED] and advances through scan → connect → bind → sync.
@@ -97,6 +105,23 @@ interface WatchEngine {
 
     /** Push the phone's current media-session snapshot to the watch. */
     fun pushNowPlaying(nowPlaying: WatchNowPlaying): Boolean = false
+
+    fun refreshWatchMusicLibrary(): Boolean = false
+
+    fun importWatchSong(song: WatchSongImport): Boolean = false
+
+    fun cancelWatchSongImport() {}
+
+    fun deleteWatchSong(musicId: Int): Boolean = false
+
+    fun createWatchMusicFolder(name: String): Boolean = false
+
+    fun updateWatchMusicFolder(folderId: Int, name: String, musicIds: List<Int>): Boolean = false
+
+    fun deleteWatchMusicFolder(folderId: Int): Boolean = false
+
+    /** App-lifetime engines normally live until process death; tests/alternate hosts may release them. */
+    fun release() {}
 
     /**
      * Push a single [notification] to the watch face (W7) — e.g. a dashboard reminder or quote.

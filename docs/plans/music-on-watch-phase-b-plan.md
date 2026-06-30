@@ -183,6 +183,27 @@ never log filenames, titles, artists, URI values, or raw file content. If wirele
 ask Fabian for the current LAN IP address and port. Tailscale and the dashboard/VPS are not needed
 for this phase.
 
+## Implementation and hardware result (2026-06-29)
+
+Phase B is implemented and deployed to the SM-G991B / Active 4 Pro. Hardware results:
+
+- The automatic post-sync query reproduced `all/free=230686720`, `used=0`, `music_num=0`.
+- A 10,940-byte silent MP3 transferred unchanged over BLE. Progress was monotonic
+  (`22, 44, 66, 88, 99, 100`), the reservation returned `music_id=1`, and the follow-up query
+  reported one song and exactly 10,940 bytes used.
+- A process restart/reconnect returned the same one-song library, proving watch persistence.
+- The SDK's native delete implementation crashes if `music_name` is null even though the public API
+  accepts a `MusicFile`. The engine therefore passes the complete queried/reserved model (id, name,
+  artist, and size) for normal deletion and rollback. Hardware deletion then returned success and
+  restored the full free-space count without restarting the process.
+- A larger silent transfer was cancelled at 92%. Reserved-row cleanup returned success and the
+  follow-up query returned zero songs, zero used bytes, and 230,686,720 free bytes.
+- A health sync completed before each automatic library query and phone music mode reapplied after
+  transfer, so those command streams remained serialized during the exercised paths.
+
+Still manual: play an imported song from the watch through paired earbuds, repeat the Phase A
+queued-track next/previous check, and explicitly exercise phone now-playing control after a transfer.
+
 ## Key files
 
 - `app/src/main/java/dev/jaredhq/dashboardandroid/watch/engine/WatchEngine.kt`

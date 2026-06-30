@@ -10,6 +10,9 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
 import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicCapabilities
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryMutationState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicTransferState
 import dev.jaredhq.dashboardandroid.watch.music.PhoneMusicState
 import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +56,9 @@ class WatchHealthViewModelTest {
             kotlinx.coroutines.flow.MutableSharedFlow<dev.jaredhq.dashboardandroid.watch.engine.WatchMusicControlEvent>()
         val musicCaps = MutableStateFlow(WatchMusicCapabilities())
         override val musicCapabilities: StateFlow<WatchMusicCapabilities> = musicCaps
+        override val watchMusicLibrary = MutableStateFlow(WatchMusicLibraryState())
+        override val watchMusicTransfer = MutableStateFlow(WatchMusicTransferState())
+        override val watchMusicLibraryMutation = MutableStateFlow(WatchMusicLibraryMutationState())
         var connectTarget: String? = null
         var disconnects = 0
         override fun init() {}
