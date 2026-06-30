@@ -216,10 +216,43 @@ watch silently dropped it. Two fixes landed in `IdoSdkWatchEngine`:
       hiccup — worth a follow-up to confirm the 60 s-backoff loop self-recovers a stalled `onConnecting`
       (it retries on `DISCONNECTED`, but a wedged `CONNECTING` wouldn't trip that). Not reproduced on
       normal (non-boot) reconnects, which were reliable all session.
-- [ ] **Background `WatchSyncWorker` sync / busy-guard:** **not exercised this session.** With the
-      always-on service holding the single GATT link, the worker no-ops by design (busy-guard,
-      source-verified); a clean test needs the service disabled (revoke notification access) then a
-      forced worker run. Deferred — lower priority now that always-on is verified.
+- [x] **Background `WatchSyncWorker` sync / busy-guard / out-of-range timeout / recovery:** **PASS
+      (2026-06-30, SM-G991B / Android 14, fresh `:app:installDebug` v0.1.0 build under JBR 21, watch
+      `F4:91:29:51:C6:45`).** Driven via the debug `DEBUG_SYNC_NOW` broadcast (`-f 0x20`, wakes the
+      force-stopped app into a fresh process so the worker faces a `DISCONNECTED` engine). VeryFit
+      (`com.watch.life`) force-stopped throughout.
+      - **Worker-owned background sync (service disabled).** Notification access revoked +
+        app force-stopped (`WatchConnectionService` absent, listener absent, no process), so the worker
+        owns the link. One fire → `connect(…) → scanning` → `target watch found` → `onConnectSuccess
+        bound=true` → `syncAllData onSuccess` → `--> POST …/watch/health` → **`<-- 201`** →
+        `WatchHealthUpload: uploaded 1227 records (stored=1227)`, then engine `disconnect()`. Exactly
+        **one** `connect(` and **one** `onConnectSuccess` (single GATT link, no duplicate); **zero**
+        `WatchConnService` lines (always-on stayed down); post-run `GATT Client … mConnectionState:
+        DISCONNECTED` (the persistent `(Connected)` entry is the separate Classic HFP/HID bond, not the
+        SDK LE link). `pushPendingToWatch` opportunistically sent the daily quote + 3 reminders (cap
+        respected) in the same window. **No foreground UI involved.**
+      - **Busy-guard (service re-enabled).** Notification access re-granted + app foregrounded; the
+        always-on service connected and settled (`maintaining link → connect` → `syncAllData onSuccess`).
+        Firing the worker against the held link → `DEBUG_SYNC_NOW received` → `WM-WorkerWrapper: Worker
+        result SUCCESS … WatchSyncWorker` **82 ms later**, with **no** new `connect(`/`onConnectSuccess`/
+        `syncAllData`. The worker ran in the service's process and no-op'd on
+        `connectionState != DISCONNECTED` — **no link contention, no interleaved sync.**
+      - **Out-of-range 6-min timeout (Bluetooth off).** Service disabled again, `svc bluetooth disable`.
+        Worker fired → `connect(…)` → `scan finished` immediately (adapter off) → never reaches
+        `SYNCING`, so `sawSyncing` stays false and `withTimeoutOrNull(360 s)` parks. The engine's connect
+        watchdog retried 3× (90 s silent each: `retry 1/2`, `retry 2/2`, `giving up after 3 attempts`)
+        without busy-looping. `Worker result SUCCESS` landed at **exactly 360.0 s** after `connect()`
+        started (17:11:53.977 → 17:17:53.991). **Bounded clean exit, no crash/ANR** (zero
+        `AndroidRuntime:E`).
+      - **Recovery after Bluetooth restored.** `svc bluetooth enable`; next worker run fully recovered:
+        scan → `target watch found` → `onConnectSuccess bound=true` → `syncAllData onSuccess` → POST →
+        **`<-- 201`** → `uploaded 1242 records (stored=1242)`. (Observed twice — a worker auto-recovered
+        the instant BT returned, and again on an explicit clean fire.)
+      - **Privacy note.** Per-record health values (`BODY_ENERGY …`, `ACTIVITY …`) appeared in logcat
+        **only** via the `BuildConfig.DEBUG`-gated trace in `UploadingWatchHealthListener` (developer-only,
+        this debug test build); the release build suppresses them (gate verified in source). No tokens,
+        contacts, GPS, or raw BLE payloads were logged. Upload bodies go only to Fabian's own
+        Tailscale dashboard host; no third-party egress observed.
 - [x] **Network egress (light check):** **PASS (light).** The only egress observed during connect/sync
       was the dashboard upload (`--> POST https://srv1464866…:8443/api/widget/v1/watch/health` →
       `<-- 201`); no Alexa/u-blox/Airoha/starcourse/other third-party host appeared in okhttp logs. A
@@ -239,9 +272,9 @@ cd /home/apolytus/workspace/worktrees/phone-integration-refinement/dashboard-and
 
 Record results here before final handoff:
 
-- [x] `./gradlew testDebugUnitTest`: **green 2026-06-28** — 89 tests, 0 failures, 0 skipped (JBR 21, Windows). Includes all four Lane-C JVM tests above + `WatchMetricSupportTest` / `WatchSyncDiagnosticsTest`.
-- [x] `./gradlew assembleDebug`: **green 2026-06-28** — debug APK built (only warning: pre-existing `setV3MessageNotice` deprecation).
-- [x] `./gradlew lintDebug`: **green 2026-06-28** — no errors.
+- [x] `./gradlew testDebugUnitTest`: **green 2026-06-30** — 114 tests, 0 failures, 0 errors, 0 skipped (JBR 21, Windows). Grew from 89 (2026-06-28) with the Jared-feed bridge additions; still includes the Lane-C JVM tests + `WatchMetricSupportTest` / `WatchSyncDiagnosticsTest`.
+- [x] `./gradlew assembleDebug`: **green 2026-06-30** — debug APK built (only warning: pre-existing `setV3MessageNotice` deprecation).
+- [x] `./gradlew lintDebug`: **green 2026-06-30** — no errors.
 
 ## Deferred dashboard commands
 
