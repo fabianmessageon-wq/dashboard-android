@@ -11,5 +11,15 @@
                 <action android:name="dev.jaredhq.dashboardandroid.DEBUG_SYNC_NOW" />
             </intent-filter>
         </receiver>
+
+        <!-- Debug-only: force an immediate JaredFeedWorker run (Daily Intelligence
+             feed → native notifications). See DebugJaredFeedTriggerReceiver. -->
+        <receiver
+            android:name=".work.DebugJaredFeedTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jaredhq.dashboardandroid.DEBUG_JARED_FEED_NOW" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

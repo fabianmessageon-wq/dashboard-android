@@ -158,10 +158,15 @@ telemetry tables later.) The historical repoint notes below are kept for context
   `ServiceLocator` no longer wires `WatchBleManager.onConnectionEvent` to the worker (that would put
   both BLE stacks on the watch at once). `IdoSdkWatchEngine.DEBUG_AUTO_CONNECT_MAC` and its
   postDelayed scaffold are deleted now the UI/worker drive connect. `assembleDebug` +
-  `testDebugUnitTest` green. **On-device unverified:** background BLE connect/sync from a Worker and
-  the busy-guard need a hardware pass. On-device verification is now Watch tab → **Connect** (no more
-  auto-connect on launch). **Still open:** optionally surface a hidden entry to the retained debug
-  console; source `deviceId` from the connected device once multi-watch matters.
+  `testDebugUnitTest` green. **On-device verified (2026-06-30, SM-G991B):** worker-owned background
+  connect → sync → dashboard `201` → clean disconnect from a force-stopped app (no foreground UI);
+  the busy-guard no-ops in ~82 ms while the always-on service holds the link (single GATT link, no
+  interleaved sync); the out-of-range path exits cleanly at exactly the 6-min budget with Bluetooth
+  off and recovers on the next run once Bluetooth returns. See
+  `docs/watch-private-engine-test-plan.md` (W7 reliability checks) for the full evidence. On-device
+  verification is now Watch tab → **Connect** (no more auto-connect on launch). **Still open:**
+  optionally surface a hidden entry to the retained debug console; source `deviceId` from the
+  connected device once multi-watch matters.
 - `WatchSyncWorker` uploads **connection telemetry** via `WatchBleManager.buildSyncRequest()` — a
   Phase-2 stopgap from before real health data existed. The engine has no equivalent; repointing the
   worker is entangled with **W5** (upload *health* data instead of telemetry). Cleanest is to fold
