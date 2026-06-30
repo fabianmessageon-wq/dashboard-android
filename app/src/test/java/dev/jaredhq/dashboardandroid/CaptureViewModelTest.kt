@@ -184,6 +184,10 @@ class CaptureViewModelTest {
             batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
             dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult(accepted = true)
+        override suspend fun getJaredFeed() =
+            dev.jaredhq.dashboardandroid.domain.model.JaredFeed(date = "", items = emptyList())
+        override suspend fun getDailyIntelligenceSettings() =
+            dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings()
     }
 
     /** Every call fails with a given HTTP status (message must not leak to the UI). */
@@ -202,5 +206,8 @@ class CaptureViewModelTest {
         override suspend fun uploadWatchHealth(
             batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
+        override suspend fun getJaredFeed(): dev.jaredhq.dashboardandroid.domain.model.JaredFeed = fail()
+        override suspend fun getDailyIntelligenceSettings():
+            dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings = fail()
     }
 }

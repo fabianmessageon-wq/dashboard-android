@@ -37,7 +37,7 @@ upload/show but the watch never sends is never overstated.
 | Stress | ✅ (HealthPressure) | ✅ `ex_main3_v3_pressure` | ✅ 24, then 4/9 | ✅ | ✅ | **SHOWN_IN_UI** | Done. |
 | HRV | ✅ (HealthHRVdata) | ✅ `V3_support_hrv` | ✅ 1/6 | ✅ | ✅ | **SHOWN_IN_UI** | Done. |
 | Workout / sport | ✅ (HealthActivityV3) | ✅ `ex_table_main9_v3_sports` | ✅ 1 (2026-06-28)⁵ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-28 (`workout_v3(p=1,i=0,m=1)` → 201). |
-| Sleep | ✅ (HealthSleepV3) | ✅ `V3_support_scientific_sleep` | ⬜ none yet³ | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Sync after a night's sleep to confirm; surface REM (rem_mins). |
+| Sleep | ✅ (HealthSleepV3) | ✅ `V3_support_scientific_sleep` | ✅ 1 night (2026-06-29)⁶ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-29 (prod row: total 504, REM 142/17, avg-HR 49, score 90). ⚠ nap/main-night collision on `(user_id, date)` — see note 6. |
 | SpO₂ | ✅ (HealthSpO2) | ✅ `ex_main3_v3_spo2_data` | ✅ 1 (2026-06-28)⁵ | ✅ | ✅ | **SHOWN_IN_UI** | Done. Verified end-to-end 2026-06-28 (`spo2(p=1,i=4,m=1)`, percent=97 → 201). |
 | Heart-rate day | ✅ (HealthHeartRate, v2) | ✅ `heartRate` | ⬜ none (v2 path) | ✅ | ✅ | FUNCTION_TABLE_SUPPORTED | Likely never fires (V3 watch). HR may live in `heart_rate_second` instead. |
 | Respiratory | ✅ (HealthRespiratoryRate) | — no flag | ⬜ none yet | ✅ | ✅ | SDK_MODEL_ONLY | Confirm emission; no capability flag to lean on. |
@@ -69,6 +69,21 @@ Notes:
    the watch, a sync delivered `workout_v3(p=1,i=0,m=1)` and `spo2(p=1,i=4,m=1)` (SpO₂ percent=97);
    both reached `metric confidence: …=SHOWN_IN_UI`, and the batch uploaded real (`--> POST
    …/watch/health` → `<-- 201`, 569 stored). VeryFit was force-stopped and logcat captured first.
+6. **Sleep verified 2026-06-29** against the **live production DB**
+   (`/home/apolytus/workspace/dashboard/data/dashboard.db`, WAL-mode, served on `:8443`). The
+   `watch_sleep_sessions` row for `2026-06-29` matches the ido-log decode exactly: total 504, deep 97,
+   light 258, **rem 142 / rem_count 17**, avg_heart_rate 49, score 90, avg_spo2 NULL (this firmware's
+   function table marks `..._add_sleep_avg_spo2`/`_avg_respir_rate` **false** → those sleep averages are
+   never emitted; only avg-HR lands). Capture caveat: last night's sleep was consumed by an **earlier
+   same-day sync (our own app's auto-sync, not VeryFit)** — sleep does **not** re-deliver once read
+   (unlike current-day intraday HR), so a controlled before-VeryFit re-sync returns all-zeros; the durable
+   `files/ido-logs/*.log` is the safety net. **⚠ Open bug — nap/main-night upsert collision:** the
+   server upserts sleep on `unique(user_id, date)` (`watch/health/route.ts`), but this watch emits naps
+   **and** a main night both stamped with the same wake-date, so whichever is written last wins. Proof:
+   the `2026-06-28` prod row is total **32** (a nap), having clobbered that night's real **475**-min main
+   sleep (present in the 06-28 ido-log). `2026-06-29` is correct only because no nap shared its date.
+   Fix is schema/DTO-side (discriminate naps, e.g. key on session start or a `is_nap` flag) — propose
+   before touching prod (`vps-no-dbpush`).
 
 ## Intraday HR investigation (2026-06-26)
 
@@ -115,10 +130,13 @@ against a real probe.
 - **Instrumentation + verification: complete.** Every SDK callback is now tallied; a real sync logs
   a counts-only diagnostics summary, a delivered-but-dropped list, and a per-metric confidence line.
 - **Proven end-to-end (SHOWN_IN_UI):** activity day, body energy, stress, HRV, **workout (2026-06-28),
-  SpO₂ (2026-06-28)**, **intraday HR (2026-06-29)**.
-- **Capable but unverified (need on-watch activity):** sleep — sync after a night's sleep to confirm
-  emission; already wired through upload + UI. (Workout + SpO₂ confirmed 2026-06-28, see note 5.)
+  SpO₂ (2026-06-28)**, **intraday HR (2026-06-29)**, **sleep (2026-06-29, prod-DB verified — note 6)**.
+- **Capable but unverified (need on-watch activity):** respiratory, heart-rate-day (v2 path, likely
+  never fires on a V3 watch). All cleanly-exposed metrics the watch advertises are now confirmed.
 - **Intraday HR:** RESOLVED 2026-06-29 — delta-seconds accumulation, verified end-to-end (above).
+- **Open bug (sleep):** nap/main-night upsert collision on `unique(user_id, date)` clobbers the main
+  sleep when a nap shares the wake-date (06-28: 475-min night → 32-min nap). Fix is schema/DTO-side;
+  propose before touching prod. See note 6.
 
 Recommended next step: confirm the **capable-but-unverified** metrics (workout/sleep/SpO₂) by
 syncing after the relevant on-watch activity — that needs **no code**, just data, and closes the

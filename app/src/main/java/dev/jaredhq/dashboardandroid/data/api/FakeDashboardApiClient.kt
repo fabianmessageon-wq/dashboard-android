@@ -2,7 +2,9 @@ package dev.jaredhq.dashboardandroid.data.api
 
 import dev.jaredhq.dashboardandroid.domain.model.CaptureMode
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
 import dev.jaredhq.dashboardandroid.domain.model.FocusSession
+import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
@@ -106,6 +108,18 @@ class FakeDashboardApiClient(
         // The offline fake simply acknowledges — no health data is persisted. Flag it offline so the
         // UI/logs don't report this as a real upload (see WatchHealthUploadResult.offline).
         return WatchHealthUploadResult(accepted = true, storedCount = batch.recordCount, offline = true)
+    }
+
+    override suspend fun getJaredFeed(): JaredFeed {
+        tick()
+        // No sample Jared feed before setup — an empty feed means the notification
+        // bridge no-ops (nothing real to surface) rather than posting fake items.
+        return JaredFeed(date = today.date, items = emptyList())
+    }
+
+    override suspend fun getDailyIntelligenceSettings(): DailyIntelligenceSettings {
+        tick()
+        return DailyIntelligenceSettings()
     }
 
     private suspend fun tick() {

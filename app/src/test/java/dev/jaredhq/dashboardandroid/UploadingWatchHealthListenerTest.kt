@@ -62,6 +62,9 @@ class UploadingWatchHealthListenerTest {
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = unused()
         override suspend fun capture(title: String): CaptureResult = unused()
         override suspend fun chat(message: String): CaptureResult = unused()
+        override suspend fun getJaredFeed(): dev.jaredhq.dashboardandroid.domain.model.JaredFeed = unused()
+        override suspend fun getDailyIntelligenceSettings():
+            dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings = unused()
     }
 
     private fun repoOver(client: DashboardApiClient) =

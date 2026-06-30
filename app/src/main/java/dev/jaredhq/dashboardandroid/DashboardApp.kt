@@ -18,6 +18,7 @@ class DashboardApp : Application() {
         ServiceLocator.init(this)
         RefreshScheduler.ensureScheduled(this)
         RefreshScheduler.ensureNotificationsScheduled(this)
+        RefreshScheduler.ensureJaredFeedScheduled(this)
         WatchSyncScheduler.ensureScheduled(this)
     }
 }

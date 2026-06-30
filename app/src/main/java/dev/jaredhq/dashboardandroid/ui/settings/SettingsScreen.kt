@@ -115,6 +115,8 @@ fun SettingsScreen(
             }
         }
 
+        DailyIntelligenceCard(baseUrl = state.baseUrl)
+
         WatchNotificationMirrorCard()
 
         Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -165,6 +167,46 @@ private fun WatchNotificationMirrorCard() {
             )
             OutlinedButton(onClick = { context.startActivity(NotificationAccess.settingsIntent()) }) {
                 Text(if (granted) "Notification access settings" else "Grant notification access")
+            }
+        }
+    }
+}
+
+/**
+ * Links out to the dashboard's Daily Intelligence ("Jared") settings page, where
+ * the master/per-category push toggles live (the Android bridge honours them via
+ * GET /api/daily-intelligence/settings). We don't duplicate those controls on the
+ * phone — the web page is the source of truth; this is just a deep link to it.
+ * Disabled until a dashboard URL is set, since there's nowhere to open otherwise.
+ */
+@Composable
+private fun DailyIntelligenceCard(baseUrl: String) {
+    val context = LocalContext.current
+    val origin = remember(baseUrl) {
+        runCatching { dev.jaredhq.dashboardandroid.data.api.ApiClientFactory.normalizeBaseUrl(baseUrl) }
+            .getOrNull()
+            ?.trimEnd('/')
+    }
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Daily Intelligence (Jared)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Jared posts your morning plan, mid-day nudges, and evening reflection as " +
+                    "notifications on this phone. Choose which categories notify you on the " +
+                    "dashboard's Daily Intelligence settings page.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(
+                enabled = origin != null,
+                onClick = {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("$origin/daily-intelligence"),
+                    )
+                    runCatching { context.startActivity(intent) }
+                },
+            ) {
+                Text("Open Jared settings")
             }
         }
     }

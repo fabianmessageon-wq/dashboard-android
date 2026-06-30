@@ -4,7 +4,9 @@ import dev.jaredhq.dashboardandroid.data.api.ApiException
 import dev.jaredhq.dashboardandroid.data.api.DashboardApiClient
 import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
@@ -102,6 +104,14 @@ class DashboardRepository(
     /** Today's reminders feed for the notification bridge (read-only, no cache). */
     suspend fun getNotifications(): Result<NotificationsPayload> =
         runApi { client().getNotifications() }
+
+    /** Today's Jared (Daily Intelligence) feed for the notification bridge (read-only). */
+    suspend fun getJaredFeed(): Result<JaredFeed> =
+        runApi { client().getJaredFeed() }
+
+    /** The user's Daily Intelligence settings (master + per-category push toggles). */
+    suspend fun getDailyIntelligenceSettings(): Result<DailyIntelligenceSettings> =
+        runApi { client().getDailyIntelligenceSettings() }
 
     suspend fun toggleHabit(habitId: Int): Result<TodayPayload> =
         runApi { client().toggleHabit(habitId).also { cache.save(it) } }
