@@ -27,6 +27,8 @@ class AppViewModelFactory : ViewModelProvider.Factory {
                 deviceId = ServiceLocator.watchDeviceId,
                 registerUiListener = { ServiceLocator.watchUiListener = it },
                 registerUploadListener = { ServiceLocator.watchUploadListener = it },
+                musicController = ServiceLocator.watchMusicController,
+                prepareSongImport = ServiceLocator.watchSongImportPreparer::prepare,
             ) as T
         else -> throw IllegalArgumentException("Unknown ViewModel: ${modelClass.name}")
     }

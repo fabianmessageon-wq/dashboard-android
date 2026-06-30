@@ -50,6 +50,10 @@ data class WatchHeartRateDay(
 /** A night's sleep with deep/light/awake/REM breakdown, score, and V3 averages. */
 data class WatchSleepSession(
     val date: String, // YYYY-MM-DD (wake date)
+    // Sleep onset as local wall-clock "YYYY-MM-DD HH:MM:SS" (V3 fall-asleep time). Uploaded as an
+    // epoch and used by the server to tell a nap apart from the main night that share a wake date
+    // (without it a short nap upsert-clobbered the night). Null only if the device reports no onset.
+    val startDateTime: String? = null,
     val totalMinutes: Int?,
     val deepMinutes: Int?,
     val lightMinutes: Int?,

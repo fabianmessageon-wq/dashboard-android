@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug-only test hook: lets a tester force an immediate background WatchSyncWorker run via
+         adb. Merged into the debug variant only; absent from release. -->
+    <application>
+        <receiver
+            android:name=".work.DebugSyncTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jaredhq.dashboardandroid.DEBUG_SYNC_NOW" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

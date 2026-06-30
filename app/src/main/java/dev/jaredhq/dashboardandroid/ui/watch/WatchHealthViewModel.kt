@@ -1,5 +1,6 @@
 package dev.jaredhq.dashboardandroid.ui.watch
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jaredhq.dashboardandroid.watch.engine.WatchActivityDay
@@ -19,6 +20,14 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicCapabilities
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryMutationState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicTransferState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchSongImport
+import dev.jaredhq.dashboardandroid.watch.engine.uniqueWatchMusicFilename
+import dev.jaredhq.dashboardandroid.watch.music.PhoneMusicState
+import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.io.File
 
 /** Per-metric tally of records seen in a sync (live during, snapshotted after). */
 data class WatchSyncCounts(
@@ -78,6 +88,13 @@ data class WatchHealthUiState(
     val lastSync: WatchSyncSummary? = null,
     /** Transient feedback for the last "send test notification" press (W7), or null. */
     val notificationHint: String? = null,
+    val musicCapabilities: WatchMusicCapabilities = WatchMusicCapabilities(),
+    val phoneMusic: PhoneMusicState = PhoneMusicState(),
+    val watchMusicLibrary: WatchMusicLibraryState = WatchMusicLibraryState(),
+    val watchMusicTransfer: WatchMusicTransferState = WatchMusicTransferState(),
+    val watchMusicLibraryMutation: WatchMusicLibraryMutationState = WatchMusicLibraryMutationState(),
+    val preparingSong: Boolean = false,
+    val songPickerError: String? = null,
 ) {
     val syncing: Boolean get() = connection == WatchEngineConnectionState.SYNCING
 }
@@ -100,6 +117,10 @@ class WatchHealthViewModel(
     private val deviceId: String,
     private val registerUiListener: (WatchHealthListener?) -> Unit,
     private val registerUploadListener: (((WatchUploadOutcome) -> Unit)?) -> Unit = {},
+    private val musicController: WatchMusicController,
+    private val prepareSongImport: suspend (Uri) -> Result<WatchSongImport> = {
+        Result.failure(IllegalStateException("Song import is unavailable."))
+    },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WatchHealthUiState())
@@ -154,6 +175,31 @@ class WatchHealthViewModel(
                         liveCounts = if (resetLive) WatchSyncCounts() else prev.liveCounts,
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            engine.musicCapabilities.collect { capabilities ->
+                _state.update { it.copy(musicCapabilities = capabilities) }
+            }
+        }
+        viewModelScope.launch {
+            musicController.state.collect { music ->
+                _state.update { it.copy(phoneMusic = music) }
+            }
+        }
+        viewModelScope.launch {
+            engine.watchMusicLibrary.collect { library ->
+                _state.update { it.copy(watchMusicLibrary = library) }
+            }
+        }
+        viewModelScope.launch {
+            engine.watchMusicTransfer.collect { transfer ->
+                _state.update { it.copy(watchMusicTransfer = transfer) }
+            }
+        }
+        viewModelScope.launch {
+            engine.watchMusicLibraryMutation.collect { mutation ->
+                _state.update { it.copy(watchMusicLibraryMutation = mutation) }
             }
         }
     }
@@ -221,6 +267,81 @@ class WatchHealthViewModel(
     /** Clear the transient notification feedback once shown. */
     fun clearNotificationHint() {
         _state.update { it.copy(notificationHint = null) }
+    }
+
+    fun setPhoneMusicEnabled(enabled: Boolean) {
+        musicController.setEnabled(enabled)
+    }
+
+    fun refreshWatchMusicLibrary() {
+        if (!engine.refreshWatchMusicLibrary()) {
+            _state.update { it.copy(songPickerError = "Connect the watch and wait for current work to finish.") }
+        }
+    }
+
+    fun onWatchSongSelected(uri: Uri?) {
+        if (uri == null || _state.value.preparingSong) return
+        _state.update { it.copy(preparingSong = true, songPickerError = null) }
+        viewModelScope.launch {
+            val prepared = prepareSongImport(uri)
+            val song = prepared.getOrNull()
+            if (song == null) {
+                _state.update {
+                    it.copy(
+                        preparingSong = false,
+                        songPickerError = prepared.exceptionOrNull()?.message
+                            ?.takeIf { message -> message == "Select an MP3 file." || message == "The selected MP3 is empty." }
+                            ?: "Couldn't prepare the selected MP3.",
+                    )
+                }
+                return@launch
+            }
+            val uniqueSong = song.copy(
+                firmwareFileName = uniqueWatchMusicFilename(
+                    song.firmwareFileName,
+                    _state.value.watchMusicLibrary.songs.map { it.fileName },
+                ),
+            )
+            val accepted = engine.importWatchSong(uniqueSong)
+            if (!accepted) File(uniqueSong.privateCachePath).delete()
+            _state.update {
+                it.copy(
+                    preparingSong = false,
+                    songPickerError = if (accepted) null
+                    else "The watch isn't ready to import this song.",
+                )
+            }
+        }
+    }
+
+    fun cancelWatchSongImport() = engine.cancelWatchSongImport()
+
+    fun deleteWatchSong(musicId: Int) {
+        if (!engine.deleteWatchSong(musicId)) {
+            _state.update { it.copy(songPickerError = "The watch isn't ready to delete this song.") }
+        }
+    }
+
+    fun createWatchMusicFolder(name: String) {
+        if (!engine.createWatchMusicFolder(name)) {
+            _state.update { it.copy(songPickerError = "The watch isn't ready to create a playlist.") }
+        }
+    }
+
+    fun updateWatchMusicFolder(folderId: Int, name: String, musicIds: List<Int>) {
+        if (!engine.updateWatchMusicFolder(folderId, name, musicIds)) {
+            _state.update { it.copy(songPickerError = "The watch isn't ready to update this playlist.") }
+        }
+    }
+
+    fun deleteWatchMusicFolder(folderId: Int) {
+        if (!engine.deleteWatchMusicFolder(folderId)) {
+            _state.update { it.copy(songPickerError = "The watch isn't ready to delete this playlist.") }
+        }
+    }
+
+    fun clearSongPickerError() {
+        _state.update { it.copy(songPickerError = null) }
     }
 
     override fun onCleared() {

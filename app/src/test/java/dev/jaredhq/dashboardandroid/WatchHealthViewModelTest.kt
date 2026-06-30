@@ -9,6 +9,12 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.engine.WatchWorkout
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicCapabilities
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicLibraryMutationState
+import dev.jaredhq.dashboardandroid.watch.engine.WatchMusicTransferState
+import dev.jaredhq.dashboardandroid.watch.music.PhoneMusicState
+import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +52,13 @@ class WatchHealthViewModelTest {
         override val connectionState: StateFlow<WatchEngineConnectionState> = conn
         override val controlEvents =
             kotlinx.coroutines.flow.MutableSharedFlow<dev.jaredhq.dashboardandroid.watch.engine.WatchControlEvent>()
+        override val musicControlEvents =
+            kotlinx.coroutines.flow.MutableSharedFlow<dev.jaredhq.dashboardandroid.watch.engine.WatchMusicControlEvent>()
+        val musicCaps = MutableStateFlow(WatchMusicCapabilities())
+        override val musicCapabilities: StateFlow<WatchMusicCapabilities> = musicCaps
+        override val watchMusicLibrary = MutableStateFlow(WatchMusicLibraryState())
+        override val watchMusicTransfer = MutableStateFlow(WatchMusicTransferState())
+        override val watchMusicLibraryMutation = MutableStateFlow(WatchMusicLibraryMutationState())
         var connectTarget: String? = null
         var disconnects = 0
         override fun init() {}
@@ -63,16 +76,28 @@ class WatchHealthViewModelTest {
         override fun syncHealth() { conn.value = WatchEngineConnectionState.SYNCING }
     }
 
+    private class FakeMusicController : WatchMusicController {
+        val mutableState = MutableStateFlow(PhoneMusicState())
+        override val state: StateFlow<PhoneMusicState> = mutableState
+        override fun setEnabled(enabled: Boolean) {
+            mutableState.value = mutableState.value.copy(enabled = enabled)
+        }
+        override fun start(notificationListener: android.content.ComponentName) {}
+        override fun stop() {}
+    }
+
     private fun vmWith(
         engine: FakeEngine,
         registered: Array<WatchHealthListener?> = arrayOf(null),
         uploadReg: Array<((WatchUploadOutcome) -> Unit)?> = arrayOf(null),
+        musicController: FakeMusicController = FakeMusicController(),
     ) =
         WatchHealthViewModel(
             engine = engine,
             deviceId = "F4:91:29:51:C6:45",
             registerUiListener = { registered[0] = it },
             registerUploadListener = { uploadReg[0] = it },
+            musicController = musicController,
         )
 
     private val workout = WatchWorkout(
@@ -251,6 +276,26 @@ class WatchHealthViewModelTest {
 
         // The outcome is dropped rather than crashing or fabricating a summary.
         assertNull(vm.state.value.lastSync)
+    }
+
+    @Test
+    fun musicToggleAndCapabilityStateFlowToUi() = runTest(dispatcher) {
+        val engine = FakeEngine()
+        val music = FakeMusicController()
+        val vm = vmWith(engine, musicController = music)
+
+        engine.musicCaps.value = WatchMusicCapabilities(
+            known = true,
+            phoneMusicControl = true,
+            artistName = true,
+            onboardMusic = true,
+        )
+        vm.setPhoneMusicEnabled(true)
+        advanceUntilIdle()
+
+        assertTrue(vm.state.value.phoneMusic.enabled)
+        assertTrue(vm.state.value.musicCapabilities.phoneMusicControl)
+        assertTrue(vm.state.value.musicCapabilities.onboardMusic)
     }
 
     @Test

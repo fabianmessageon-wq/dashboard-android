@@ -13,6 +13,7 @@ import com.ido.ble.callback.BaseGetDeviceInfoCallBack
 import com.ido.ble.callback.BindCallBack
 import com.ido.ble.callback.CallBackManager
 import com.ido.ble.callback.ConnectCallBack
+import com.ido.ble.callback.OperateCallBack
 import com.ido.ble.callback.ScanCallBack
 import com.ido.ble.data.manage.database.HealthActivity
 import com.ido.ble.data.manage.database.HealthActivityV3
@@ -27,12 +28,16 @@ import com.ido.ble.data.manage.database.HealthSport
 import com.ido.ble.data.manage.database.HealthSportItem
 import com.ido.ble.data.manage.database.HealthSportV3
 import com.ido.ble.protocol.model.SupportFunctionInfo
+import com.ido.ble.file.transfer.FileTransferConfig
+import com.ido.ble.file.transfer.IFileTransferListener
+import com.ido.ble.protocol.model.MusicOperate
 import com.veryfit.multi.nativeprotocol.Protocol
 import dev.jaredhq.dashboardandroid.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 
 /**
  * [WatchEngine] backed by the vendored IDO/VeryFit SDK (ADR 0001).
@@ -67,6 +72,71 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         kotlinx.coroutines.flow.MutableSharedFlow<WatchControlEvent>(extraBufferCapacity = 8)
     override val controlEvents: kotlinx.coroutines.flow.SharedFlow<WatchControlEvent> =
         _controlEvents.asSharedFlow()
+
+    private val _musicControlEvents =
+        kotlinx.coroutines.flow.MutableSharedFlow<WatchMusicControlEvent>(extraBufferCapacity = 8)
+    override val musicControlEvents: kotlinx.coroutines.flow.SharedFlow<WatchMusicControlEvent> =
+        _musicControlEvents.asSharedFlow()
+
+    private val _musicCapabilities = MutableStateFlow(WatchMusicCapabilities())
+    override val musicCapabilities: StateFlow<WatchMusicCapabilities> =
+        _musicCapabilities.asStateFlow()
+
+    private val _watchMusicLibrary = MutableStateFlow(WatchMusicLibraryState())
+    override val watchMusicLibrary: StateFlow<WatchMusicLibraryState> =
+        _watchMusicLibrary.asStateFlow()
+
+    private val _watchMusicTransfer = MutableStateFlow(WatchMusicTransferState())
+    override val watchMusicTransfer: StateFlow<WatchMusicTransferState> =
+        _watchMusicTransfer.asStateFlow()
+
+    private val _watchMusicLibraryMutation = MutableStateFlow(WatchMusicLibraryMutationState())
+    override val watchMusicLibraryMutation: StateFlow<WatchMusicLibraryMutationState> =
+        _watchMusicLibraryMutation.asStateFlow()
+
+    private enum class FolderUpdateStage { RENAME, REMOVE, ADD }
+
+    private sealed interface MusicOperation {
+        data object Idle : MusicOperation
+        data object Query : MusicOperation
+        data class Import(
+            val song: WatchSongImport,
+            val musicId: Int? = null,
+            val cancelRequested: Boolean = false,
+        ) : MusicOperation
+        data class Cleanup(
+            val song: WatchSongImport,
+            val musicId: Int,
+            val terminalStatus: WatchMusicTransferStatus,
+            val error: String?,
+        ) : MusicOperation
+        data class Delete(val song: WatchMusicLibraryItem) : MusicOperation
+        data class FolderCreate(val folder: WatchMusicFolder) : MusicOperation
+        data class FolderUpdate(
+            val original: WatchMusicFolder,
+            val desiredName: String,
+            val desiredMusicIds: List<Int>,
+            val additions: List<Int>,
+            val retainedAfterRemoval: List<Int>,
+            val stage: FolderUpdateStage,
+        ) : MusicOperation
+        data class FolderDelete(val folder: WatchMusicFolder) : MusicOperation
+    }
+
+    @Volatile
+    private var musicOperation: MusicOperation = MusicOperation.Idle
+
+    private val musicTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val musicTimeoutRunnable = Runnable { onMusicOperationTimeout() }
+
+    @Volatile
+    private var phoneMusicEnabled = false
+
+    @Volatile
+    private var appliedPhoneMusicEnabled: Boolean? = null
+
+    @Volatile
+    private var latestNowPlaying: WatchNowPlaying? = null
 
     @Volatile
     private var initialized = false
@@ -252,6 +322,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     override fun disconnect() {
+        abortMusicOperationOnDisconnect()
         functionTableCached = false
         cachedFunctionInfo = null
         pendingSyncAfterFunctionTable = false
@@ -263,6 +334,92 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     override fun isConnected(): Boolean = BLEManager.isConnected()
+
+    override fun setPhoneMusicEnabled(enabled: Boolean): Boolean {
+        phoneMusicEnabled = enabled
+        return applyPhoneMusicEnabled()
+    }
+
+    override fun pushNowPlaying(nowPlaying: WatchNowPlaying): Boolean {
+        latestNowPlaying = nowPlaying
+        if (!phoneMusicEnabled || !isConnected() ||
+            _connectionState.value != WatchEngineConnectionState.CONNECTED ||
+            cachedFunctionInfo?.bleControlMusic != true || musicOperation !is MusicOperation.Idle
+        ) {
+            return false
+        }
+        return sendNowPlaying(nowPlaying)
+    }
+
+    private fun applyPhoneMusicEnabled(): Boolean {
+        if (!isConnected() ||
+            _connectionState.value != WatchEngineConnectionState.CONNECTED ||
+            musicOperation !is MusicOperation.Idle
+        ) {
+            appliedPhoneMusicEnabled = null
+            return false
+        }
+        val capabilities = _musicCapabilities.value
+        if (phoneMusicEnabled && (!capabilities.known || !capabilities.phoneMusicControl)) {
+            return false
+        }
+        if (appliedPhoneMusicEnabled == phoneMusicEnabled) {
+            if (phoneMusicEnabled) latestNowPlaying?.let(::sendNowPlaying)
+            return true
+        }
+        return runCatching {
+            BLEManager.setMusicSwitchPending(phoneMusicEnabled)
+            BLEManager.setMusicSwitch(phoneMusicEnabled)
+            if (phoneMusicEnabled) {
+                BLEManager.enterMusicMode()
+                latestNowPlaying?.let(::sendNowPlaying)
+            } else {
+                BLEManager.setMusicControlInfo(
+                    com.ido.ble.protocol.model.MusicControlInfo().apply {
+                        status = com.ido.ble.protocol.model.MusicControlInfo.STATUS_STOP
+                        curTimeSecond = 0
+                        totalTimeSecond = 0
+                        musicName = ""
+                        singerName = ""
+                    },
+                )
+                BLEManager.exitMusicMode()
+            }
+            appliedPhoneMusicEnabled = phoneMusicEnabled
+            Log.i(TAG, "phone music mode enabled=$phoneMusicEnabled")
+            true
+        }.getOrElse {
+            Log.w(TAG, "phone music mode update failed enabled=$phoneMusicEnabled", it)
+            false
+        }
+    }
+
+    private fun sendNowPlaying(nowPlaying: WatchNowPlaying): Boolean = runCatching {
+        val info = com.ido.ble.protocol.model.MusicControlInfo().apply {
+            status = when (nowPlaying.state) {
+                WatchPlaybackState.PLAYING ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_PLAY
+                WatchPlaybackState.PAUSED ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_PAUSE
+                WatchPlaybackState.STOPPED ->
+                    com.ido.ble.protocol.model.MusicControlInfo.STATUS_STOP
+            }
+            curTimeSecond = nowPlaying.positionSeconds.coerceAtLeast(0)
+            totalTimeSecond = nowPlaying.durationSeconds.coerceAtLeast(0)
+            musicName = nowPlaying.title
+            singerName = if (_musicCapabilities.value.artistName) nowPlaying.artist else ""
+        }
+        BLEManager.setMusicControlInfo(info)
+        Log.i(
+            TAG,
+            "now-playing pushed state=${nowPlaying.state} " +
+                "titleLen=${nowPlaying.title.length} artistLen=${nowPlaying.artist.length}",
+        )
+        true
+    }.getOrElse {
+        Log.w(TAG, "now-playing push failed", it)
+        false
+    }
 
     override fun syncHealth() {
         if (!isConnected()) {
@@ -279,6 +436,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             Log.i(TAG, "syncHealth() ignored — a sync is already in progress/pending")
             return
         }
+        if (musicOperation !is MusicOperation.Idle) {
+            Log.i(TAG, "syncHealth() ignored — onboard music operation active")
+            return
+        }
         if (!functionTableCached) {
             // Without the device function table the encrypted handshake fails; fetch it first
             // and resume the sync from onGetFunctionTable below.
@@ -288,6 +449,321 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return
         }
         startSync()
+    }
+
+    override fun refreshWatchMusicLibrary(): Boolean {
+        if (!canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle) ||
+            !_musicCapabilities.value.onboardMusic
+        ) {
+            return false
+        }
+        musicOperation = MusicOperation.Query
+        _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+            status = WatchMusicLibraryStatus.LOADING,
+            error = null,
+        )
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            Log.i(MUSIC_TAG, "library query started")
+            BLEManager.queryMusicAndFolderInfo()
+            true
+        }.getOrElse {
+            clearMusicOperationTimeout()
+            musicOperation = MusicOperation.Idle
+            _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                status = WatchMusicLibraryStatus.ERROR,
+                error = "Couldn't query the watch library.",
+            )
+            Log.w(MUSIC_TAG, "library query dispatch failed", it)
+            false
+        }
+    }
+
+    override fun importWatchSong(song: WatchSongImport): Boolean {
+        if (!canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle) ||
+            !_musicCapabilities.value.onboardMusic
+        ) {
+            return false
+        }
+        val file = File(song.privateCachePath)
+        val storage = _watchMusicLibrary.value.storage
+        if (!file.isFile || file.length() <= 0 || file.length() != song.sizeBytes ||
+            storage == null || !hasWatchMusicCapacity(storage.freeBytes, song.sizeBytes)
+        ) {
+            file.delete()
+            _watchMusicTransfer.value = WatchMusicTransferState(
+                status = WatchMusicTransferStatus.FAILED,
+                bytesTotal = song.sizeBytes.coerceAtLeast(0),
+                error = if (storage != null && !hasWatchMusicCapacity(storage.freeBytes, song.sizeBytes)) {
+                    "Not enough free space on the watch."
+                } else {
+                    "The selected MP3 could not be validated."
+                },
+            )
+            return false
+        }
+        val validated = song.copy(firmwareFileName = sanitizeWatchMusicFilename(song.firmwareFileName))
+        musicOperation = MusicOperation.Import(validated)
+        _watchMusicTransfer.value = WatchMusicTransferState(
+            status = WatchMusicTransferStatus.RESERVING,
+            bytesTotal = validated.sizeBytes,
+        )
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            val sdkSong = MusicOperate.MusicFile().apply {
+                music_name = validated.firmwareFileName
+                singer_name = validated.artist
+                music_memory = validated.sizeBytes
+            }
+            Log.i(MUSIC_TAG, "reservation started bytes=${validated.sizeBytes}")
+            BLEManager.addMusicFile(sdkSong)
+            true
+        }.getOrElse {
+            Log.w(MUSIC_TAG, "reservation dispatch failed", it)
+            finishWatchSongImport(WatchMusicTransferStatus.FAILED, "Couldn't reserve space on the watch.")
+            false
+        }
+    }
+
+    override fun cancelWatchSongImport() {
+        when (val operation = musicOperation) {
+            is MusicOperation.Import -> {
+                if (operation.musicId == null) {
+                    musicOperation = operation.copy(cancelRequested = true)
+                    _watchMusicTransfer.value = _watchMusicTransfer.value.copy(
+                        status = WatchMusicTransferStatus.CLEANING_UP,
+                        error = null,
+                    )
+                } else {
+                    beginReservedSongCleanup(
+                        operation.song,
+                        operation.musicId,
+                        WatchMusicTransferStatus.CANCELLED,
+                        null,
+                        stopTransfer = true,
+                    )
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    override fun deleteWatchSong(musicId: Int): Boolean {
+        val librarySong = _watchMusicLibrary.value.songs.firstOrNull { it.musicId == musicId }
+            ?: return false
+        if (musicId < 0 ||
+            !_musicCapabilities.value.onboardMusic ||
+            !canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle)
+        ) {
+            return false
+        }
+        musicOperation = MusicOperation.Delete(librarySong)
+        _watchMusicTransfer.value = WatchMusicTransferState()
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            Log.i(MUSIC_TAG, "delete started id=$musicId")
+            BLEManager.deleteMusicFile(librarySong.toSdkMusicFile())
+            true
+        }.getOrElse {
+            Log.w(MUSIC_TAG, "delete dispatch failed id=$musicId", it)
+            clearMusicOperationTimeout()
+            musicOperation = MusicOperation.Idle
+            _watchMusicLibrary.value = _watchMusicLibrary.value.copy(error = "Couldn't delete the song.")
+            false
+        }
+    }
+
+    override fun createWatchMusicFolder(name: String): Boolean {
+        val library = _watchMusicLibrary.value
+        if (!canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle) ||
+            !_musicCapabilities.value.onboardMusic || library.status != WatchMusicLibraryStatus.READY
+        ) {
+            return false
+        }
+        val folderId = nextWatchMusicFolderId(library.folders) ?: run {
+            _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+                WatchMusicLibraryMutationStatus.FAILED,
+                "The watch supports at most $WATCH_MUSIC_FOLDER_LIMIT playlists.",
+            )
+            return false
+        }
+        val safeName = uniqueWatchMusicFolderName(name, library.folders.map { it.name })
+        if (safeName.isBlank()) {
+            _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+                WatchMusicLibraryMutationStatus.FAILED,
+                "Enter a playlist name.",
+            )
+            return false
+        }
+        val folder = WatchMusicFolder(folderId, safeName, emptyList())
+        musicOperation = MusicOperation.FolderCreate(folder)
+        _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+            WatchMusicLibraryMutationStatus.CREATING,
+        )
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            Log.i(MUSIC_TAG, "playlist create started id=$folderId")
+            BLEManager.addMusicFolder(folder.toSdkMusicFolder())
+            true
+        }.getOrElse {
+            Log.w(MUSIC_TAG, "playlist create dispatch failed id=$folderId", it)
+            finishMusicLibraryMutation(false, "Couldn't create the playlist.")
+            false
+        }
+    }
+
+    override fun updateWatchMusicFolder(folderId: Int, name: String, musicIds: List<Int>): Boolean {
+        val library = _watchMusicLibrary.value
+        val folder = library.folders.firstOrNull { it.folderId == folderId } ?: return false
+        if (!canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle) ||
+            library.status != WatchMusicLibraryStatus.READY
+        ) {
+            return false
+        }
+        val validSongIds = library.songs.mapTo(mutableSetOf()) { it.musicId }
+        val plan = planWatchMusicFolderUpdate(
+            folder = folder,
+            candidateName = name,
+            desiredMusicIds = musicIds,
+            validSongIds = validSongIds,
+            otherFolderNames = library.folders.filterNot { it.folderId == folderId }.map { it.name },
+        )
+        if (plan == null) {
+            _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+                WatchMusicLibraryMutationStatus.FAILED,
+                "Enter a valid playlist name and song selection.",
+            )
+            return false
+        }
+        val firstStage = when {
+            plan.renameRequired -> FolderUpdateStage.RENAME
+            plan.removalRequired -> FolderUpdateStage.REMOVE
+            plan.additions.isNotEmpty() -> FolderUpdateStage.ADD
+            else -> return true
+        }
+        val operation = MusicOperation.FolderUpdate(
+            original = folder,
+            desiredName = plan.name,
+            desiredMusicIds = plan.desiredMusicIds,
+            additions = plan.additions,
+            retainedAfterRemoval = plan.retainedAfterRemoval,
+            stage = firstStage,
+        )
+        musicOperation = operation
+        _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+            WatchMusicLibraryMutationStatus.UPDATING,
+        )
+        return dispatchFolderUpdate(operation)
+    }
+
+    override fun deleteWatchMusicFolder(folderId: Int): Boolean {
+        val folder = _watchMusicLibrary.value.folders.firstOrNull { it.folderId == folderId }
+            ?: return false
+        if (!canStartWatchMusicOperation(_connectionState.value, musicOperation !is MusicOperation.Idle)) {
+            return false
+        }
+        musicOperation = MusicOperation.FolderDelete(folder)
+        _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+            WatchMusicLibraryMutationStatus.DELETING,
+        )
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            Log.i(MUSIC_TAG, "playlist delete started id=$folderId")
+            BLEManager.deleteMusicFolder(folder.toSdkMusicFolder())
+            true
+        }.getOrElse {
+            Log.w(MUSIC_TAG, "playlist delete dispatch failed id=$folderId", it)
+            finishMusicLibraryMutation(false, "Couldn't delete the playlist.")
+            false
+        }
+    }
+
+    private fun dispatchFolderUpdate(operation: MusicOperation.FolderUpdate): Boolean {
+        clearMusicOperationTimeout()
+        musicOperation = operation
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        return runCatching {
+            when (operation.stage) {
+                FolderUpdateStage.RENAME -> {
+                    Log.i(MUSIC_TAG, "playlist rename started id=${operation.original.folderId}")
+                    BLEManager.updateMusicFolder(
+                        operation.original.copy(name = operation.desiredName).toSdkMusicFolder(),
+                    )
+                }
+                FolderUpdateStage.REMOVE -> {
+                    Log.i(MUSIC_TAG, "playlist membership removal started id=${operation.original.folderId}")
+                    BLEManager.removeMusicFromFolder(
+                        operation.original.copy(
+                            name = operation.desiredName,
+                            musicIds = operation.retainedAfterRemoval,
+                        ).toSdkMusicFolder(),
+                    )
+                }
+                FolderUpdateStage.ADD -> {
+                    Log.i(MUSIC_TAG, "playlist membership addition started id=${operation.original.folderId}")
+                    BLEManager.moveMusicIntoFolder(
+                        operation.original.copy(
+                            name = operation.desiredName,
+                            musicIds = operation.additions,
+                        ).toSdkMusicFolder(),
+                    )
+                }
+            }
+            true
+        }.getOrElse {
+            Log.w(MUSIC_TAG, "playlist update dispatch failed id=${operation.original.folderId}", it)
+            finishMusicLibraryMutation(false, "Couldn't update the playlist.")
+            false
+        }
+    }
+
+    private fun continueFolderUpdate(completedStage: FolderUpdateStage, success: Boolean) {
+        val operation = musicOperation as? MusicOperation.FolderUpdate ?: return
+        if (operation.stage != completedStage) return
+        if (!success) {
+            finishMusicLibraryMutation(false, "The watch rejected the playlist update.")
+            return
+        }
+        val nextStage = when (completedStage) {
+            FolderUpdateStage.RENAME -> when {
+                operation.retainedAfterRemoval.size != operation.original.musicIds.size ->
+                    FolderUpdateStage.REMOVE
+                operation.additions.isNotEmpty() -> FolderUpdateStage.ADD
+                else -> null
+            }
+            FolderUpdateStage.REMOVE ->
+                if (operation.additions.isNotEmpty()) FolderUpdateStage.ADD else null
+            FolderUpdateStage.ADD -> null
+        }
+        if (nextStage == null) finishMusicLibraryMutation(true, null)
+        else dispatchFolderUpdate(operation.copy(stage = nextStage))
+    }
+
+    private fun finishMusicLibraryMutation(success: Boolean, error: String?) {
+        clearMusicOperationTimeout()
+        musicOperation = MusicOperation.Idle
+        _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+            if (success) WatchMusicLibraryMutationStatus.SUCCEEDED
+            else WatchMusicLibraryMutationStatus.FAILED,
+            error,
+        )
+        refreshLibraryAfterMutation()
+        schedulePhoneMusicApply()
+    }
+
+    override fun release() {
+        abortMusicOperationOnDisconnect()
+        connectRetryHandler.removeCallbacks(connectRetryRunnable)
+        connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
+        val cm = CallBackManager.getManager()
+        cm.unregisterScanCallBack(scanCallBack)
+        cm.unregisterConnectCallBack(connectCallBack)
+        cm.unregisterBindCallBack(bindCallBack)
+        cm.unregisterGetDeviceInfoCallBack(deviceInfoCallBack)
+        cm.unregisterDeviceControlAppCallBack(deviceControlCallBack)
+        cm.unregisterOperateCallBack(operateCallBack)
+        cm.unregisterOperateMusicCallBack(operateMusicCallBack)
+        initialized = false
     }
 
     override fun sendNotification(notification: WatchNotification): Boolean {
@@ -449,10 +925,378 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerBindCallBack(bindCallBack)
         cm.registerGetDeviceInfoCallBack(deviceInfoCallBack)
         cm.registerDeviceControlAppCallBack(deviceControlCallBack)
+        cm.registerOperateCallBack(operateCallBack)
+        cm.registerOperateMusicCallBack(operateMusicCallBack)
         // NOTE: no registerSyncActivity/HealthCallBack here. The orchestrated syncAllData() path
         // delivers every record through the SyncPara.ISyncDataListener (syncDataListener) below;
         // registering the CallBackManager SyncCallBacks too would double-deliver each record.
     }
+
+    // ── On-watch music library + serialized mutation state machine ─────────────────────
+
+    private val operateCallBack = object : OperateCallBack.ICallBack {
+        override fun onQueryResult(type: OperateCallBack.OperateType?, value: Any?) {
+            if (type != OperateCallBack.OperateType.MUSIC_AND_FOLDER ||
+                musicOperation !is MusicOperation.Query
+            ) {
+                return
+            }
+            clearMusicOperationTimeout()
+            musicOperation = MusicOperation.Idle
+            val info = value as? MusicOperate.MusicAndFolderInfo
+            if (info == null) {
+                _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                    status = WatchMusicLibraryStatus.ERROR,
+                    error = "The watch returned an invalid library response.",
+                )
+                Log.w(MUSIC_TAG, "library query returned unexpected payload")
+                return
+            }
+            _watchMusicLibrary.value = mapWatchMusicLibrary(
+                WatchMusicLibraryInput(
+                    totalBytes = info.all_memory,
+                    usedBytes = info.used_memory,
+                    freeBytes = info.useful_memory,
+                    songs = info.music_items.orEmpty().map { song ->
+                        WatchMusicLibraryItem(
+                            musicId = song.music_id,
+                            fileName = song.music_name.orEmpty(),
+                            artist = song.singer_name.orEmpty(),
+                            sizeBytes = song.music_memory,
+                        )
+                    },
+                    folders = info.folder_items.orEmpty().map { folder ->
+                        WatchMusicFolder(
+                            folderId = folder.folder_id,
+                            name = folder.folder_name.orEmpty(),
+                            musicIds = folder.music_index.orEmpty().distinct(),
+                        )
+                    },
+                ),
+            )
+            Log.i(
+                MUSIC_TAG,
+                "library query complete count=${info.music_items.orEmpty().size} " +
+                    "used=${info.used_memory} free=${info.useful_memory}",
+            )
+            applyPhoneMusicEnabled()
+        }
+
+        override fun onAddResult(type: OperateCallBack.OperateType?, success: Boolean) {}
+        override fun onDeleteResult(type: OperateCallBack.OperateType?, success: Boolean) {}
+        override fun onModifyResult(type: OperateCallBack.OperateType?, success: Boolean) {}
+        override fun onSetResult(type: OperateCallBack.OperateType?, success: Boolean) {}
+    }
+
+    private val operateMusicCallBack = object : OperateCallBack.IMusicCallBack {
+        override fun onAddMusic(type: OperateCallBack.OperateType?, success: Boolean, musicId: Int) {
+            val operation = musicOperation as? MusicOperation.Import ?: return
+            if (!success || musicId < 0) {
+                Log.w(MUSIC_TAG, "reservation failed")
+                finishWatchSongImport(
+                    if (operation.cancelRequested) WatchMusicTransferStatus.CANCELLED
+                    else WatchMusicTransferStatus.FAILED,
+                    if (operation.cancelRequested) null else "The watch rejected the song reservation.",
+                )
+                return
+            }
+            if (operation.cancelRequested) {
+                beginReservedSongCleanup(
+                    operation.song,
+                    musicId,
+                    WatchMusicTransferStatus.CANCELLED,
+                    null,
+                    stopTransfer = false,
+                )
+                return
+            }
+            clearMusicOperationTimeout()
+            musicOperation = operation.copy(musicId = musicId)
+            _watchMusicTransfer.value = _watchMusicTransfer.value.copy(
+                status = WatchMusicTransferStatus.TRANSFERRING,
+                progressPercent = 0,
+            )
+            scheduleMusicTimeout(MUSIC_TRANSFER_TIMEOUT_MS)
+            runCatching {
+                val config = FileTransferConfig.getDefaultMusicFileConfig(
+                    operation.song.privateCachePath,
+                    musicFileTransferListener,
+                ).apply {
+                    firmwareSpecName = operation.song.firmwareFileName
+                }
+                Log.i(MUSIC_TAG, "BLE transfer requested id=$musicId bytes=${operation.song.sizeBytes}")
+                BLEManager.startTranCommonFile(config)
+            }.onFailure {
+                Log.w(MUSIC_TAG, "BLE transfer dispatch failed id=$musicId", it)
+                beginReservedSongCleanup(
+                    operation.song,
+                    musicId,
+                    WatchMusicTransferStatus.FAILED,
+                    "Couldn't start the BLE transfer.",
+                    stopTransfer = false,
+                )
+            }
+        }
+
+        override fun onDeleteMusic(type: OperateCallBack.OperateType?, success: Boolean) {
+            when (val operation = musicOperation) {
+                is MusicOperation.Cleanup -> {
+                    Log.i(MUSIC_TAG, "reserved-row cleanup complete success=$success id=${operation.musicId}")
+                    finishWatchSongImport(operation.terminalStatus, operation.error)
+                }
+                is MusicOperation.Delete -> {
+                    clearMusicOperationTimeout()
+                    musicOperation = MusicOperation.Idle
+                    _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                        error = if (success) null else "The watch could not delete the song.",
+                    )
+                    Log.i(MUSIC_TAG, "delete complete success=$success id=${operation.song.musicId}")
+                    refreshLibraryAfterMutation()
+                }
+                else -> Unit
+            }
+        }
+
+        override fun onAddFolder(type: OperateCallBack.OperateType?, success: Boolean) {
+            val operation = musicOperation as? MusicOperation.FolderCreate ?: return
+            Log.i(MUSIC_TAG, "playlist create complete success=$success id=${operation.folder.folderId}")
+            finishMusicLibraryMutation(success, if (success) null else "The watch rejected the playlist.")
+        }
+
+        override fun onDeleteFolder(type: OperateCallBack.OperateType?, success: Boolean) {
+            val operation = musicOperation as? MusicOperation.FolderDelete ?: return
+            Log.i(MUSIC_TAG, "playlist delete complete success=$success id=${operation.folder.folderId}")
+            finishMusicLibraryMutation(success, if (success) null else "The watch could not delete the playlist.")
+        }
+
+        override fun onDeleteFolderMusic(type: OperateCallBack.OperateType?, success: Boolean) {
+            continueFolderUpdate(FolderUpdateStage.REMOVE, success)
+        }
+
+        override fun onImportFolder(type: OperateCallBack.OperateType?, success: Boolean) {
+            continueFolderUpdate(FolderUpdateStage.ADD, success)
+        }
+
+        override fun onInvalid(type: OperateCallBack.OperateType?, success: Boolean) {
+            if (musicOperation is MusicOperation.FolderCreate ||
+                musicOperation is MusicOperation.FolderUpdate ||
+                musicOperation is MusicOperation.FolderDelete
+            ) {
+                finishMusicLibraryMutation(false, "The watch rejected the playlist operation.")
+            }
+        }
+
+        override fun onModifyFolder(type: OperateCallBack.OperateType?, success: Boolean) {
+            continueFolderUpdate(FolderUpdateStage.RENAME, success)
+        }
+    }
+
+    private val musicFileTransferListener = object : IFileTransferListener {
+        override fun onStart() {
+            if (musicOperation is MusicOperation.Import) Log.i(MUSIC_TAG, "BLE transfer started")
+        }
+
+        override fun onProgress(percent: Int) {
+            if (musicOperation !is MusicOperation.Import) return
+            _watchMusicTransfer.value = reduceWatchMusicProgress(_watchMusicTransfer.value, percent)
+            Log.i(MUSIC_TAG, "BLE transfer progress=${_watchMusicTransfer.value.progressPercent}")
+        }
+
+        override fun onSuccess() {
+            val operation = musicOperation as? MusicOperation.Import ?: return
+            clearMusicOperationTimeout()
+            Log.i(MUSIC_TAG, "BLE transfer succeeded id=${operation.musicId}")
+            finishWatchSongImport(WatchMusicTransferStatus.SUCCEEDED, null)
+        }
+
+        override fun onFailed(error: String?) {
+            val operation = musicOperation as? MusicOperation.Import ?: return
+            val musicId = operation.musicId
+            Log.w(MUSIC_TAG, "BLE transfer failed id=$musicId errorPresent=${!error.isNullOrBlank()}")
+            if (musicId == null) {
+                finishWatchSongImport(WatchMusicTransferStatus.FAILED, "The BLE transfer failed.")
+            } else {
+                beginReservedSongCleanup(
+                    operation.song,
+                    musicId,
+                    WatchMusicTransferStatus.FAILED,
+                    "The BLE transfer failed.",
+                    stopTransfer = false,
+                )
+            }
+        }
+    }
+
+    private fun beginReservedSongCleanup(
+        song: WatchSongImport,
+        musicId: Int,
+        terminalStatus: WatchMusicTransferStatus,
+        error: String?,
+        stopTransfer: Boolean,
+    ) {
+        clearMusicOperationTimeout()
+        musicOperation = MusicOperation.Cleanup(song, musicId, terminalStatus, error)
+        _watchMusicTransfer.value = _watchMusicTransfer.value.copy(
+            status = WatchMusicTransferStatus.CLEANING_UP,
+            error = null,
+        )
+        if (stopTransfer) runCatching { BLEManager.stopTranCommonFile() }
+        scheduleMusicTimeout(MUSIC_COMMAND_TIMEOUT_MS)
+        runCatching {
+            BLEManager.deleteMusicFile(
+                MusicOperate.MusicFile().apply {
+                    music_id = musicId
+                    music_name = song.firmwareFileName
+                    singer_name = song.artist
+                    music_memory = song.sizeBytes
+                },
+            )
+        }.onFailure {
+            Log.w(MUSIC_TAG, "reserved-row cleanup dispatch failed id=$musicId", it)
+            finishWatchSongImport(terminalStatus, error)
+        }
+    }
+
+    private fun finishWatchSongImport(status: WatchMusicTransferStatus, error: String?) {
+        val song = when (val operation = musicOperation) {
+            is MusicOperation.Import -> operation.song
+            is MusicOperation.Cleanup -> operation.song
+            else -> null
+        }
+        clearMusicOperationTimeout()
+        musicOperation = MusicOperation.Idle
+        song?.let { runCatching { File(it.privateCachePath).delete() } }
+        _watchMusicTransfer.value = WatchMusicTransferState(
+            status = status,
+            progressPercent = if (status == WatchMusicTransferStatus.SUCCEEDED) 100 else null,
+            bytesTotal = song?.sizeBytes ?: _watchMusicTransfer.value.bytesTotal,
+            error = error,
+        )
+        refreshLibraryAfterMutation()
+        schedulePhoneMusicApply()
+    }
+
+    private fun refreshLibraryAfterMutation() {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+            { refreshWatchMusicLibrary() },
+            MUSIC_REFRESH_DELAY_MS,
+        )
+    }
+
+    private fun scheduleMusicTimeout(delayMillis: Long) {
+        musicTimeoutHandler.removeCallbacks(musicTimeoutRunnable)
+        musicTimeoutHandler.postDelayed(musicTimeoutRunnable, delayMillis)
+    }
+
+    private fun clearMusicOperationTimeout() {
+        musicTimeoutHandler.removeCallbacks(musicTimeoutRunnable)
+    }
+
+    private fun onMusicOperationTimeout() {
+        when (val operation = musicOperation) {
+            MusicOperation.Idle -> Unit
+            MusicOperation.Query -> {
+                musicOperation = MusicOperation.Idle
+                _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                    status = WatchMusicLibraryStatus.ERROR,
+                    error = "The watch library query timed out.",
+                )
+                Log.w(MUSIC_TAG, "library query timed out")
+            }
+            is MusicOperation.Import -> {
+                if (operation.musicId != null) {
+                    beginReservedSongCleanup(
+                        operation.song,
+                        operation.musicId,
+                        if (operation.cancelRequested) WatchMusicTransferStatus.CANCELLED
+                        else WatchMusicTransferStatus.FAILED,
+                        if (operation.cancelRequested) null else "The watch transfer timed out.",
+                        stopTransfer = true,
+                    )
+                } else {
+                    finishWatchSongImport(
+                        if (operation.cancelRequested) WatchMusicTransferStatus.CANCELLED
+                        else WatchMusicTransferStatus.FAILED,
+                        if (operation.cancelRequested) null else "The watch reservation timed out.",
+                    )
+                }
+            }
+            is MusicOperation.Cleanup -> {
+                Log.w(MUSIC_TAG, "reserved-row cleanup timed out id=${operation.musicId}")
+                finishWatchSongImport(operation.terminalStatus, operation.error)
+            }
+            is MusicOperation.Delete -> {
+                musicOperation = MusicOperation.Idle
+                _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                    error = "Deleting the song timed out.",
+                )
+                refreshLibraryAfterMutation()
+            }
+            is MusicOperation.FolderCreate,
+            is MusicOperation.FolderUpdate,
+            is MusicOperation.FolderDelete,
+            -> finishMusicLibraryMutation(false, "The playlist operation timed out.")
+        }
+    }
+
+    private fun abortMusicOperationOnDisconnect() {
+        val operation = musicOperation
+        clearMusicOperationTimeout()
+        if (operation is MusicOperation.Import && operation.musicId != null) {
+            runCatching { BLEManager.stopTranCommonFile() }
+        }
+        val song = when (operation) {
+            is MusicOperation.Import -> operation.song
+            is MusicOperation.Cleanup -> operation.song
+            else -> null
+        }
+        song?.let { runCatching { File(it.privateCachePath).delete() } }
+        if (song != null) {
+            _watchMusicTransfer.value = WatchMusicTransferState(
+                status = if (operation is MusicOperation.Import && operation.cancelRequested) {
+                    WatchMusicTransferStatus.CANCELLED
+                } else {
+                    WatchMusicTransferStatus.FAILED
+                },
+                bytesTotal = song.sizeBytes,
+                error = if (operation is MusicOperation.Import && operation.cancelRequested) null
+                else "The watch disconnected during the operation.",
+            )
+        }
+        if (operation is MusicOperation.FolderCreate ||
+            operation is MusicOperation.FolderUpdate ||
+            operation is MusicOperation.FolderDelete
+        ) {
+            _watchMusicLibraryMutation.value = WatchMusicLibraryMutationState(
+                WatchMusicLibraryMutationStatus.FAILED,
+                "The watch disconnected during the playlist operation.",
+            )
+        }
+        if (operation !is MusicOperation.Idle) {
+            _watchMusicLibrary.value = _watchMusicLibrary.value.copy(
+                status = WatchMusicLibraryStatus.UNAVAILABLE,
+                error = null,
+            )
+        }
+        musicOperation = MusicOperation.Idle
+    }
+
+    /** The native delete path dereferences music_name; passing only an id crashes in JNI. */
+    private fun WatchMusicLibraryItem.toSdkMusicFile(): MusicOperate.MusicFile =
+        MusicOperate.MusicFile().also { sdkSong ->
+            sdkSong.music_id = musicId
+            sdkSong.music_name = fileName
+            sdkSong.singer_name = artist
+            sdkSong.music_memory = sizeBytes
+        }
+
+    private fun WatchMusicFolder.toSdkMusicFolder(): MusicOperate.MusicFolder =
+        MusicOperate.MusicFolder().also { sdkFolder ->
+            sdkFolder.folder_id = folderId
+            sdkFolder.folder_name = name
+            sdkFolder.music_index = musicIds.toMutableList()
+            sdkFolder.music_num = musicIds.size
+        }
 
     // ── Scan → connect → bind lifecycle ──────────────────────────────────────────────
 
@@ -523,10 +1367,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         override fun onConnectBreak(mac: String?) {
             Log.w(TAG, "onConnectBreak $mac")
+            abortMusicOperationOnDisconnect()
             functionTableCached = false
             cachedFunctionInfo = null
             pendingSyncAfterFunctionTable = false
             notifyStatesEnabled = false
+            appliedPhoneMusicEnabled = null
+            _musicCapabilities.value = WatchMusicCapabilities()
             // The link is down for good; a wedge-watchdog from this attempt no longer applies.
             connectWatchdogHandler.removeCallbacks(connectWatchdogRunnable)
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
@@ -563,10 +1410,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     // ── Device → app control (W7 call control) ────────────────────────────────────────
-    // The watch sends these when the user taps answer/reject/mute on an incoming-call notification
-    // we pushed with the support* flags set. We translate to domain [WatchControlEvent]s; the app's
-    // connection service performs the actual telephony action. Non-call controls (media/camera/volume)
-    // are ignored for now.
+    // Call actions flow to WatchConnectionService. Music actions flow to the app-owned media-session
+    // controller, which allows a short grace period for native AVRCP before applying a GATT fallback.
     private val deviceControlCallBack = object : com.ido.ble.callback.DeviceControlAppCallBack.ICallBack {
         override fun onControlEvent(
             type: com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType?,
@@ -585,6 +1430,23 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 Log.i(TAG, "device control: $type → $event")
                 _controlEvents.tryEmit(event)
             }
+            val musicEvent = when (type) {
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.START ->
+                    WatchMusicControlEvent.PLAY
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.PAUSE ->
+                    WatchMusicControlEvent.PAUSE
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.STOP ->
+                    WatchMusicControlEvent.STOP
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.NEXT ->
+                    WatchMusicControlEvent.NEXT
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.PREVIOUS ->
+                    WatchMusicControlEvent.PREVIOUS
+                else -> null
+            }
+            if (musicEvent != null) {
+                Log.i(TAG, "device music control: $type")
+                _musicControlEvents.tryEmit(musicEvent)
+            }
         }
 
         override fun onAntiLostNotice(on: Boolean, time: Long) {}
@@ -598,6 +1460,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onGetFunctionTable(info: SupportFunctionInfo?) {
             functionTableCached = info != null
             cachedFunctionInfo = info
+            _musicCapabilities.value = WatchMusicCapabilities(
+                known = info != null,
+                phoneMusicControl = info?.bleControlMusic == true,
+                artistName = info?.V3_music_control_02_add_singer_name == true,
+                onboardMusic = info?.V3_support_v3_ble_music == true,
+            )
             Log.i(TAG, "onGetFunctionTable received (cached=$functionTableCached)")
             if (info != null) logFunctionTable()
             if (pendingSyncAfterFunctionTable) {
@@ -608,6 +1476,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     Log.w(TAG, "function table is null — cannot complete sync")
                     listener?.onSyncFailed()
                 }
+            } else if (info != null) {
+                applyPhoneMusicEnabled()
+                if (info.V3_support_v3_ble_music == true) refreshLibraryAfterMutation()
             }
         }
     }
@@ -623,6 +1494,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
             enableMessageNotifyStates()
+            schedulePhoneMusicApply()
+            refreshLibraryAfterMutation()
             listener?.onSyncComplete()
         }
         override fun onFailed(type: SyncPara.SyncFailedType?) {
@@ -632,8 +1505,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             logSyncDiagnostics()
             _connectionState.value = postSyncState()
             enableMessageNotifyStates()
+            schedulePhoneMusicApply()
+            refreshLibraryAfterMutation()
             listener?.onSyncFailed()
         }
+    }
+
+    /** Keep music commands out of the ordered health sync and the notify-state command beside it. */
+    private fun schedulePhoneMusicApply() {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+            { applyPhoneMusicEnabled() },
+            500L,
+        )
     }
 
     /**
@@ -1026,6 +1909,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             "W7 notify path: v3_add_app_name=${readFunctionFlag("V3_support_set_v3_notify_add_app_name")}, " +
                 "ex_v3_notify_msg=${readFunctionFlag("ex_table_main10_v3_notify_msg")}",
         )
+        Log.i(
+            TAG,
+            "music capabilities: control=${readFunctionFlag("bleControlMusic")}, " +
+                "artist=${readFunctionFlag("V3_music_control_02_add_singer_name")}, " +
+                "onboard=${readFunctionFlag("V3_support_v3_ble_music")}, " +
+                "appSpp=${readFunctionFlag("support_app_connect_with_spp")}",
+        )
     }
 
     /**
@@ -1085,6 +1975,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private fun HealthSleep.toDomain() = WatchSleepSession(
         date = WatchTime.ymd(year, month, day),
+        // v2 HealthSleep carries no fall-asleep time and these devices don't report naps (one night
+        // per date), so midnight-of-wake-date is a stable, idempotent dedup key for the upsert.
+        startDateTime = WatchTime.ymdhms(year, month, day, 0, 0, 0),
         totalMinutes = totalSleepMinutes,
         deepMinutes = deepSleepMinutes,
         lightMinutes = lightSleepMinutes,
@@ -1102,6 +1995,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private fun HealthSleepV3.toDomain() = WatchSleepSession(
         // V3 keys the night by wake-up ("get up") time.
         date = WatchTime.ymd(get_up_year, get_up_month, get_up_day),
+        // Real sleep onset — the discriminator that keeps a nap and the main night (same wake date)
+        // as separate rows server-side. 0-year is the SDK's empty sentinel → leave null.
+        startDateTime = if (fall_asleep_year == 0) {
+            null
+        } else {
+            WatchTime.ymdhms(
+                fall_asleep_year, fall_asleep_month, fall_asleep_day,
+                fall_asleep_hour, fall_asleep_minte, 0,
+            )
+        },
         totalMinutes = total_sleep_time_mins,
         deepMinutes = deep_mins,
         lightMinutes = light_mins,
@@ -1184,6 +2087,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     }
 
     private companion object {
+        const val MUSIC_TAG = "WatchMusicTransfer"
+        const val MUSIC_COMMAND_TIMEOUT_MS = 30_000L
+        const val MUSIC_TRANSFER_TIMEOUT_MS = 10 * 60_000L
+        const val MUSIC_REFRESH_DELAY_MS = 750L
         const val TAG = "IdoSdkWatchEngine"
 
         /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
