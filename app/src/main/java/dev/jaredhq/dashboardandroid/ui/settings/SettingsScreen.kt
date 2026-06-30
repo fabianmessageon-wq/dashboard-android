@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.jaredhq.dashboardandroid.BuildConfig
+import dev.jaredhq.dashboardandroid.notify.JaredFeedStatusStore
 import dev.jaredhq.dashboardandroid.notify.NotificationAccess
 import dev.jaredhq.dashboardandroid.ui.theme.DashboardTheme
 
@@ -116,6 +118,10 @@ fun SettingsScreen(
         }
 
         DailyIntelligenceCard(baseUrl = state.baseUrl)
+
+        if (BuildConfig.DEBUG) {
+            JaredFeedDebugStatusCard()
+        }
 
         WatchNotificationMirrorCard()
 
@@ -207,6 +213,71 @@ private fun DailyIntelligenceCard(baseUrl: String) {
                 },
             ) {
                 Text("Open Jared settings")
+            }
+        }
+    }
+}
+
+/**
+ * Debug-only diagnostics for the Jared feed bridge worker. Shows the outcome of
+ * the last [dev.jaredhq.dashboardandroid.work.JaredFeedWorker] run so a tester can
+ * tell apart "configured but the Tailscale fetch/auth failed" (RETRY + error),
+ * "not configured", and "off at the OS" without attaching logcat. Re-reads on
+ * resume so it reflects a run triggered by the DEBUG_JARED_FEED_NOW broadcast.
+ * Compiled in every variant but only shown when [BuildConfig.DEBUG].
+ */
+@Composable
+private fun JaredFeedDebugStatusCard() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val store = remember { JaredFeedStatusStore(context) }
+    var status by remember { mutableStateOf(store.read()) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) status = store.read()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Jared feed sync (debug)", style = MaterialTheme.typography.titleMedium)
+            val s = status
+            if (s == null) {
+                Text(
+                    "Never run on this install. Trigger one:\n" +
+                        "adb shell am broadcast -a " +
+                        "dev.jaredhq.dashboardandroid.DEBUG_JARED_FEED_NOW " +
+                        "-p dev.jaredhq.dashboardandroid -f 0x20",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                val when_ = android.text.format.DateUtils.getRelativeTimeSpanString(s.runAtMillis)
+                val abs = java.text.SimpleDateFormat("MMM d HH:mm:ss", java.util.Locale.US)
+                    .format(java.util.Date(s.runAtMillis))
+                Text("Last run: $when_ ($abs)", style = MaterialTheme.typography.bodyMedium)
+                Text("Result: ${s.result.name}", style = MaterialTheme.typography.bodyMedium)
+                if (s.fetched >= 0) {
+                    Text(
+                        "Fetched: ${s.fetched} · Notified: ${s.notified}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Text(
+                    "Settings: ${if (s.settingsLoaded) "loaded from server" else "defaulted"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (s.baseUrl.isNotBlank()) {
+                    Text("Base URL: ${s.baseUrl}", style = MaterialTheme.typography.bodySmall)
+                }
+                s.error?.let {
+                    Text(
+                        "Error: $it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
