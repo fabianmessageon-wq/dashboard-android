@@ -7,7 +7,9 @@ import dev.jaredhq.dashboardandroid.data.api.dto.toDirectCaptureResult
 import dev.jaredhq.dashboardandroid.data.api.dto.toDomain
 import dev.jaredhq.dashboardandroid.data.api.dto.toDto
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
@@ -55,6 +57,12 @@ class RetrofitDashboardApiClient(
 
     override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult =
         call { service.uploadWatchHealth(batch.toDto()).toDomain() }
+
+    override suspend fun getJaredFeed(): JaredFeed =
+        call { service.getJaredFeed().toDomain() }
+
+    override suspend fun getDailyIntelligenceSettings(): DailyIntelligenceSettings =
+        call { service.getDailyIntelligenceSettings().toDomain() }
 
     /** Run a service call, normalizing every failure into [ApiException]. */
     private inline fun <T> call(block: () -> T): T = try {

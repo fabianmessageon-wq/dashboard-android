@@ -9,6 +9,16 @@
     <string name="channel_quote_name">Daily quote</string>
     <string name="channel_quote_desc">A daily line from your notes, on the lock screen.</string>
 
+    <!-- Daily Intelligence ("Jared") notification channels (see JaredNotifier). -->
+    <string name="channel_jared_morning_name">Morning plan</string>
+    <string name="channel_jared_morning_desc">When Jared has prepared or updated today\'s plan.</string>
+    <string name="channel_jared_midday_name">Mid-day adjustments</string>
+    <string name="channel_jared_midday_desc">Nudges when your day drifts from the plan — conflicts, running late, free time.</string>
+    <string name="channel_jared_evening_name">Evening reflection</string>
+    <string name="channel_jared_evening_desc">Jared\'s end-of-day summary of how today went.</string>
+    <string name="channel_jared_result_name">Plan updates</string>
+    <string name="channel_jared_result_desc">Confirmations when a plan is approved, scheduled, or executed.</string>
+
     <!-- NotificationListenerService that mirrors calls/SMS to the watch (W7). -->
     <string name="watch_notification_listener_label">Mirror calls &amp; texts to watch</string>
 

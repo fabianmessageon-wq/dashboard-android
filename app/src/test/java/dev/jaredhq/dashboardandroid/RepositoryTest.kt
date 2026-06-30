@@ -160,6 +160,9 @@ class RepositoryTest {
         override suspend fun uploadWatchHealth(
             batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
+        override suspend fun getJaredFeed(): dev.jaredhq.dashboardandroid.domain.model.JaredFeed = fail()
+        override suspend fun getDailyIntelligenceSettings():
+            dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings = fail()
     }
 
     /** getToday works, but the quote endpoint is unavailable. */
@@ -178,5 +181,9 @@ class RepositoryTest {
             batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
             throw ApiException(0, "n/a")
+        override suspend fun getJaredFeed() =
+            dev.jaredhq.dashboardandroid.domain.model.JaredFeed(date = "", items = emptyList())
+        override suspend fun getDailyIntelligenceSettings() =
+            dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings()
     }
 }

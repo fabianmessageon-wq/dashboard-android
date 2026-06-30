@@ -1,7 +1,9 @@
 package dev.jaredhq.dashboardandroid.data.api
 
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
+import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
+import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
@@ -64,6 +66,19 @@ interface DashboardApiClient {
      * re-uploading the same sync is safe. Returns the server's acknowledgement.
      */
     suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult
+
+    /**
+     * GET /api/daily-intelligence/feed — today's Jared agent feed (active +
+     * resolved items, newest first). Read-scoped; the notification bridge filters
+     * to active, unseen, important items.
+     */
+    suspend fun getJaredFeed(): JaredFeed
+
+    /**
+     * GET /api/daily-intelligence/settings — the user's Daily Intelligence
+     * preferences, so the bridge can honour the master/per-category push toggles.
+     */
+    suspend fun getDailyIntelligenceSettings(): DailyIntelligenceSettings
 }
 
 /** Thrown by API clients. [status] is the HTTP code when known (0 otherwise). */

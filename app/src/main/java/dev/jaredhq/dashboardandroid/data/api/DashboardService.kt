@@ -3,8 +3,10 @@ package dev.jaredhq.dashboardandroid.data.api
 import dev.jaredhq.dashboardandroid.data.api.dto.CaptureRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.CaptureResponseDto
 import dev.jaredhq.dashboardandroid.data.api.dto.ChatRequest
+import dev.jaredhq.dashboardandroid.data.api.dto.DailyIntelligenceSettingsDto
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartResponseDto
+import dev.jaredhq.dashboardandroid.data.api.dto.JaredFeedPayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.NotificationsPayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.QuotePayloadDto
 import dev.jaredhq.dashboardandroid.data.api.dto.TodayPayloadDto
@@ -49,4 +51,13 @@ interface DashboardService {
 
     @POST("api/widget/v1/watch/health")
     suspend fun uploadWatchHealth(@Body body: WatchHealthUploadDto): WatchHealthResponseDto
+
+    // ── Daily Intelligence ("Jared"). Authorized by the same device Bearer token;
+    // both are read-scoped (`requireUserFromRequest(req, { scope: "read" })`). ──
+
+    @GET("api/daily-intelligence/feed")
+    suspend fun getJaredFeed(): JaredFeedPayloadDto
+
+    @GET("api/daily-intelligence/settings")
+    suspend fun getDailyIntelligenceSettings(): DailyIntelligenceSettingsDto
 }

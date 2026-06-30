@@ -17,6 +17,7 @@ object RefreshScheduler {
 
     private const val WORK_NAME = "today-refresh"
     private const val NOTIFY_WORK_NAME = "notifications-bridge"
+    private const val JARED_WORK_NAME = "jared-feed-bridge"
 
     fun ensureScheduled(context: Context) {
         val request = PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES)
@@ -51,6 +52,28 @@ object RefreshScheduler {
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             NOTIFY_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            request,
+        )
+    }
+
+    /**
+     * Registers the periodic [JaredFeedWorker]. Every 30 minutes — the Daily
+     * Intelligence feed is more time-sensitive than reminders (morning plan,
+     * mid-day "running late" nudges), but 30 min stays battery-friendly. The
+     * worker is idempotent (id-keyed dedupe), so the period only bounds latency.
+     */
+    fun ensureJaredFeedScheduled(context: Context) {
+        val request = PeriodicWorkRequestBuilder<JaredFeedWorker>(30, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            JARED_WORK_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request,
         )
