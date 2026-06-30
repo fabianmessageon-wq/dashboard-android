@@ -104,12 +104,25 @@ session** it only ever listed `stress`, `activity_day_v3`, `body_energy`,
 keyed by completed-day / already-synced — **sleep_v3, respiratory, heart_rate_day_v2,
 hrv, spo2** — was **absent**, because the IDO SDK advances a per-type sync offset
 (`SetSyncHealthOffset(type, offset)`) and won't re-deliver a window it already sent.
-Consequence: **§A (sleep dual-row) and §C below cannot be re-observed on demand** —
-they need (a) genuinely fresh data (wear/wait), (b) a small **debug hook to reset the
-per-type offset to 0** to force a re-pull (highest leverage — unblocks sleep,
-respiratory, v2-HR-day, HRV, SpO2 re-observation in one change; not currently
-exposed), or (c) a read of what already landed in the prod DB. Recommend adding the
-offset-reset debug receiver before the next hardware sitting.
+Consequence: **§A (sleep dual-row) and §C below cannot be re-observed on demand.**
+
+**Offset-reset hook investigated 2026-06-30 → NOT viable; do not retry it blindly.**
+- A debug hook to reset the per-type cursor would need the native
+  `Protocol.SetSyncHealthOffset(int type, int offset)`, reachable only via obfuscated
+  internals (`com.ido.ble…umbra.basilisk(int,int)`) with **undocumented per-type
+  codes** — fragile black-box code the project rules forbid, and wrong codes risk
+  corrupting the SDK sync cursor.
+- The clean public `com.ido.ble.LocalDataManager` can re-emit *stored* records, but
+  **has no getter for the V3 types that matter** (`HealthSleepV3`,
+  `HealthRespiratoryRate`, `HealthHRVdata`, `HealthBodyPower`; only v2 types + SpO2 +
+  v2-HR-day are exposed). And re-emitting stored data wouldn't answer §C anyway — the
+  matrix question is about **watch delivery**, not replaying local storage.
+
+**Therefore the only sound path is genuinely fresh / unsynced data:** wear the watch so
+a new window (a real nap **and** a main night for §A) is pending, then sync. The prod
+DB read (read-only `sqlite3`, with authorization) confirms the server-side result.
+(A research spike to fully document `SetSyncHealthOffset`'s type codes could revisit a
+guarded hook later, but that's a separate, non-trivial task — not a quick win.)
 
 ### C. Respiratory + v2 heart-rate-day matrix closeout (both code-ready)
 Both handlers map + forward to the listener **and** add to the sync-diagnostics
