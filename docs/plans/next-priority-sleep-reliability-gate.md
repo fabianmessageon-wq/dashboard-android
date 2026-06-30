@@ -4,6 +4,31 @@
 > Pick this up next. Several steps are hands-on (watch wear) or need a decision —
 > read the caveats before running anything.
 
+## Verification status (2026-06-30, SM-G991B)
+
+**Android half: VERIFIED.** The V3 sleep mapper carries the onset discriminator —
+`HealthSleepV3.fall_asleep_*` → `WatchSleepSession.startDateTime`, with `date` keyed
+to the wake-up ("get up") day — so a nap and the main night sharing a wake date map
+to the **same `date`, distinct `startDateTime`** (v2 falls back to midnight-of-wake-
+date). Unit-covered; `testDebugUnitTest` green (114). Source: `IdoSdkWatchEngine.kt`
+`HealthSleepV3.toDomain()` (~L1995) + `WatchHealthModels.kt`.
+
+**End-to-end (dual-row) half: BLOCKED — deferred by Fabian 2026-06-30.** Two blockers,
+neither solvable from an adb-only Windows session:
+1. **No sleep to exercise it.** Sync is incremental; last night's sleep is already
+   synced and there's no nap. Across **5 worker syncs this session the watch emitted
+   0 SLEEP sessions** (it re-emits only today's rolling metrics: body-energy, HR-sec,
+   stress, activity). No app hook resets the IDO per-type sync offset to force a
+   re-pull, so existing sleep can't be re-observed without code or fresh wear.
+2. **No prod-DB read.** The "two rows, distinct `started_at`, idempotent" assertion
+   lives in `watch_sleep_sessions` on `srv1464866`; a read-only SSH was policy-denied
+   this session. Needs explicit authorization (or Fabian runs the `sqlite3` SELECT).
+
+**To close:** wear the watch for a nap **and** a main night on one wake date → force-
+stop VeryFit → `DEBUG_SYNC_NOW -f 0x20` → confirm the Android emits two same-date
+`SLEEP WatchSleepSession(...)` with distinct `startDateTime`, then read-only-verify two
+DB rows + re-sync idempotency (runbook §A/§B below).
+
 ## Goal
 
 Close the sleep nap/main-night data-loss fix end to end: a nap and a main night
@@ -71,14 +96,31 @@ so a normal deploy already ran it — this just confirms. (Caveat: a `--force` p
 adding the new unique constraint fails if pre-existing rows already collide on
 `(user,date,started_at)`; if the index is missing, check row collisions first.)
 
+### ⚠ Shared blocker found 2026-06-30: incremental sync hides already-synced metrics
+A worker sync emits the privacy-safe tally `sync diagnostics: …(p=,i=,m=)` at
+`onSuccess` (tag `IdoSdkWatchEngine`, not `WatchBLE`). Across **5 syncs this
+session** it only ever listed `stress`, `activity_day_v3`, `body_energy`,
+`heart_rate_second` — i.e. **only today's rolling intraday metrics**. Everything
+keyed by completed-day / already-synced — **sleep_v3, respiratory, heart_rate_day_v2,
+hrv, spo2** — was **absent**, because the IDO SDK advances a per-type sync offset
+(`SetSyncHealthOffset(type, offset)`) and won't re-deliver a window it already sent.
+Consequence: **§A (sleep dual-row) and §C below cannot be re-observed on demand** —
+they need (a) genuinely fresh data (wear/wait), (b) a small **debug hook to reset the
+per-type offset to 0** to force a re-pull (highest leverage — unblocks sleep,
+respiratory, v2-HR-day, HRV, SpO2 re-observation in one change; not currently
+exposed), or (c) a read of what already landed in the prod DB. Recommend adding the
+offset-reset debug receiver before the next hardware sitting.
+
 ### C. Respiratory + v2 heart-rate-day matrix closeout (both code-ready)
-Both handlers map + forward to the listener **and** emit a diagnostic line, so a
-single sync confirms emission at a glance (`adb logcat -s WatchBLE:D`):
+Both handlers map + forward to the listener **and** add to the sync-diagnostics
+tally, so a single sync confirms emission via `sync diagnostics: …` — **but see the
+shared blocker above: neither fired this session (already-synced).**
 - **Respiratory:** look for `respiratory(p=…,i=…,m=…)` with `m>0` → upload →
   `<-- 201` → rows. Then flip the matrix Respiratory row off `SDK_MODEL_ONLY`.
-- **v2 HR-day:** look for `heart_rate_day_v2(…)`. If it never appears, the row's
-  "likely never fires (V3 watch)" is **confirmed** — annotate as such and stop
-  chasing it (intraday HR already covers HR, verified 2026-06-29).
+- **v2 HR-day:** look for `heart_rate_day_v2(…)`. If it never appears **on a sync
+  that actually carries an unsynced HR-day window** (not merely an offset-skipped
+  one), the row's "likely never fires (V3 watch)" is confirmed — annotate as such and
+  stop chasing it (intraday HR already covers HR, verified 2026-06-29).
 
 ### Then (still hardware, lower priority)
 PCAPdroid network-egress capture → remaining human music checks. Defer
