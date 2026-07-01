@@ -6,10 +6,12 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHrvReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchRespiratoryReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchSleepSession
 import dev.jaredhq.dashboardandroid.watch.engine.WatchSpo2Reading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchStressReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchTemperatureReading
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -80,6 +82,74 @@ class WatchHealthMappingTest {
         val stress = dto.stressReadings.single()
         assertEquals(expectedEpoch("2026-06-24 14:20:00"), stress.recordedAt)
         assertEquals(38, stress.stressScore)
+    }
+
+    @Test
+    fun sleepV3CarriesRemAveragesAndOnsetEpoch() {
+        // V3 main night: rich REM + per-night averages, and a fall-asleep onset that becomes the
+        // server's nap/main-night discriminator (an epoch in the phone's zone).
+        val batch = WatchHealthBatch(
+            deviceId = "f4:91:29:51:c6:45",
+            sleepSessions = listOf(
+                WatchSleepSession(
+                    date = "2026-06-28",
+                    startDateTime = "2026-06-27 22:05:00",
+                    totalMinutes = 475,
+                    deepMinutes = 107,
+                    lightMinutes = 283,
+                    awakeMinutes = 0,
+                    deepCount = 4,
+                    lightCount = 9,
+                    awakeCount = 1,
+                    score = 89,
+                    sleepEndHour = 6,
+                    sleepEndMinute = 0,
+                    remMinutes = 85,
+                    remCount = 9,
+                    avgHeartRate = 52,
+                    avgSpo2 = null,
+                    avgRespiratoryRate = null,
+                ),
+            ),
+        )
+
+        val dto = batch.toDto().sleepSessions.single()
+        assertEquals("2026-06-28", dto.date)
+        assertEquals(expectedEpoch("2026-06-27 22:05:00"), dto.startedAt)
+        assertEquals(475, dto.totalMinutes)
+        assertEquals(85, dto.remMinutes)
+        assertEquals(9, dto.remCount)
+        assertEquals(52, dto.avgHeartRate)
+        // This watch never emits sleep SpO2/respiration — they stay null through the mapper.
+        assertNull(dto.avgSpo2)
+        assertNull(dto.avgRespiratoryRate)
+    }
+
+    @Test
+    fun sleepWithoutOnsetHasNullStartedAt() {
+        // The legacy v2 path (and any session with no fall-asleep time) maps to a null onset, which
+        // the server keys as midnight-of-wake-date rather than a distinct nap row.
+        val batch = WatchHealthBatch(
+            deviceId = "f4:91:29:51:c6:45",
+            sleepSessions = listOf(
+                WatchSleepSession(
+                    date = "2026-06-28",
+                    startDateTime = null,
+                    totalMinutes = 20,
+                    deepMinutes = null,
+                    lightMinutes = null,
+                    awakeMinutes = null,
+                    deepCount = null,
+                    lightCount = null,
+                    awakeCount = null,
+                    score = 100,
+                    sleepEndHour = 8,
+                    sleepEndMinute = 22,
+                ),
+            ),
+        )
+
+        assertNull(batch.toDto().sleepSessions.single().startedAt)
     }
 
     @Test

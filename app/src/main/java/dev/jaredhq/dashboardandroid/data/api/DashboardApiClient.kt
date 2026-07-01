@@ -7,6 +7,8 @@ import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
+import dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto
+import dev.jaredhq.dashboardandroid.data.api.dto.toDto
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 
@@ -64,8 +66,15 @@ interface DashboardApiClient {
      * POST /api/widget/v1/watch/health — upload decoded health records from a watch sync
      * (activity days, heart-rate days, sleep sessions, workouts). Upserts are idempotent, so
      * re-uploading the same sync is safe. Returns the server's acknowledgement.
+     *
+     * Delegates to [uploadWatchHealthDto]; implementations only implement the DTO form so the
+     * repository can re-send a spooled DTO (see [dev.jaredhq.dashboardandroid.data.repository.WatchHealthUploadQueue]).
      */
-    suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult
+    suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult =
+        uploadWatchHealthDto(batch.toDto())
+
+    /** POST an already-serialised watch-health wire DTO. The retry seam for spooled uploads. */
+    suspend fun uploadWatchHealthDto(dto: WatchHealthUploadDto): WatchHealthUploadResult
 
     /**
      * GET /api/daily-intelligence/feed — today's Jared agent feed (active +

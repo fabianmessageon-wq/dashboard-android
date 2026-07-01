@@ -193,10 +193,11 @@ class UploadingWatchHealthListener(
         }
     }
 
-    // Logs each decoded record (incl. the full SLEEP session) before it is batched/uploaded. Beyond
-    // diagnostics this is the no-loss capture path: flush() clears the buffers and the upload has no
-    // local retry, so a failed POST drops the batch — these DEBUG-gated logcat lines are the only
-    // durable copy. Keep debug-gated (private decoded health values; never uploaded model-facing).
+    // Logs each decoded record (incl. the full SLEEP session) before it is batched/uploaded. flush()
+    // clears the buffers before the POST; a failed POST is now spooled by the repository
+    // (WatchHealthUploadQueue) and retried on the next sync, so the batch is no longer lost. These
+    // DEBUG-gated logcat lines remain a durable dev-side capture (and the record of exactly what was
+    // decoded). Keep debug-gated (private decoded health values; never uploaded model-facing).
     private fun logPrivateRecord(kind: String, record: Any) {
         if (BuildConfig.DEBUG) Log.i(TAG, "$kind $record")
     }

@@ -157,8 +157,8 @@ class RepositoryTest {
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
-        override suspend fun uploadWatchHealth(
-            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        override suspend fun uploadWatchHealthDto(
+            dto: dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
         override suspend fun getJaredFeed(): dev.jaredhq.dashboardandroid.domain.model.JaredFeed = fail()
         override suspend fun getDailyIntelligenceSettings():
@@ -177,8 +177,8 @@ class RepositoryTest {
             throw ApiException(0, "n/a")
         override suspend fun chat(message: String): CaptureResult =
             throw ApiException(0, "n/a")
-        override suspend fun uploadWatchHealth(
-            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        override suspend fun uploadWatchHealthDto(
+            dto: dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
             throw ApiException(0, "n/a")
         override suspend fun getJaredFeed() =

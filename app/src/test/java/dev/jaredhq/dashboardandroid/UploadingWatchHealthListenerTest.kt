@@ -54,6 +54,11 @@ class UploadingWatchHealthListenerTest {
             return onUpload(batch)
         }
 
+        // These tests exercise the batch path (no retry queue), so the DTO seam is unused here.
+        override suspend fun uploadWatchHealthDto(
+            dto: dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto,
+        ): WatchHealthUploadResult = unused()
+
         private fun unused(): Nothing = throw UnsupportedOperationException("not used in this test")
         override suspend fun getToday(): TodayPayload = unused()
         override suspend fun getQuote(): QuotePayload = unused()

@@ -46,7 +46,15 @@ data class WatchHealthUploadDto(
     val bloodPressureReadings: List<WatchBloodPressureReadingDto> = emptyList(),
     val stressReadings: List<WatchStressReadingDto> = emptyList(),
     val heartRateReadings: List<WatchHeartRateReadingDto> = emptyList(),
-)
+) {
+    /** Total records across every list — mirrors [WatchHealthBatch.recordCount] for the wire form
+     *  (used when a spooled DTO is re-sent without its originating batch). */
+    val recordCount: Int
+        get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size +
+            spo2Readings.size + hrvReadings.size + respiratoryReadings.size +
+            temperatureReadings.size + bodyEnergyReadings.size +
+            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size
+}
 
 @Serializable
 data class WatchActivityDayDto(

@@ -10,6 +10,8 @@ import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.data.cache.room.CacheDatabase
 import dev.jaredhq.dashboardandroid.data.cache.room.RoomTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
+import dev.jaredhq.dashboardandroid.data.repository.WatchHealthUploadQueue
+import java.io.File
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import dev.jaredhq.dashboardandroid.watch.engine.CompositeWatchHealthListener
@@ -112,6 +114,11 @@ object ServiceLocator {
             repository = DashboardRepository(
                 cache = cache,
                 apiProvider = { makeClient() },
+                // Durable spool so a failed watch-health POST survives to the next sync (the BLE
+                // sync + listener flush have already cleared both the watch's and our buffers).
+                watchUploadQueue = WatchHealthUploadQueue(
+                    File(appContext.filesDir, "watch-upload-queue"),
+                ),
             )
 
             // Vendored-SDK engine (ADR 0001). init() is idempotent; it loads the native lib

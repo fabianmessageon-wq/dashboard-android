@@ -2,6 +2,7 @@ package dev.jaredhq.dashboardandroid.data.repository
 
 import dev.jaredhq.dashboardandroid.data.api.ApiException
 import dev.jaredhq.dashboardandroid.data.api.DashboardApiClient
+import dev.jaredhq.dashboardandroid.data.api.dto.toDto
 import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
@@ -31,6 +32,12 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 class DashboardRepository(
     private val cache: TodayCache,
     private val apiProvider: suspend () -> DashboardApiClient,
+    /**
+     * Durable spool for watch-health uploads that fail to POST. Optional: null keeps the old
+     * fire-and-forget behaviour (used by previews/tests that don't exercise retry). Production wires
+     * a file-backed queue so a failed upload survives to the next sync instead of being lost.
+     */
+    private val watchUploadQueue: WatchHealthUploadQueue? = null,
 ) {
 
     /** Whether a value came from the network or the offline cache. */
@@ -132,9 +139,43 @@ class DashboardRepository(
     suspend fun chat(message: String): Result<CaptureResult> =
         runApi { client().chat(message).also { cache.save(it.today) } }
 
-    /** Upload a batch of decoded watch health records (activity/HR/sleep/workouts). */
-    suspend fun uploadWatchHealth(batch: WatchHealthBatch): Result<WatchHealthUploadResult> =
-        runApi { client().uploadWatchHealth(batch) }
+    /**
+     * Upload a batch of decoded watch health records (activity/HR/sleep/workouts).
+     *
+     * Loss-safe: the BLE sync has already cleared the watch's buffer and the listener clears ours
+     * before this runs, so a dropped POST would lose the whole sync. We first drain any previously
+     * spooled failures (a recovered connection catches up), then upload the new batch; on failure we
+     * spool its wire DTO to retry on the next sync. Uploads are idempotent server-side, so a
+     * re-send of a batch that actually landed is harmless.
+     */
+    suspend fun uploadWatchHealth(batch: WatchHealthBatch): Result<WatchHealthUploadResult> {
+        retryPendingWatchHealth()
+        val result = runApi { client().uploadWatchHealth(batch) }
+        result.onFailure { watchUploadQueue?.enqueue(batch.toDto()) }
+        return result
+    }
+
+    /**
+     * Re-send watch-health uploads that previously failed and were spooled. Stops at the first entry
+     * that still fails (likely still offline) and leaves the rest for next time. Returns how many the
+     * server accepted. Safe to call before any upload or from the refresh worker. A no-op when no
+     * queue is configured or the spool is empty.
+     */
+    suspend fun retryPendingWatchHealth(): Int {
+        val queue = watchUploadQueue ?: return 0
+        var accepted = 0
+        for (pending in queue.pending()) {
+            val res = runApi { client().uploadWatchHealthDto(pending.dto) }.getOrNull()
+            // Only treat a real server acceptance as done — an offline/fake ack didn't persist.
+            if (res != null && res.accepted && !res.offline) {
+                queue.remove(pending)
+                accepted++
+            } else {
+                break
+            }
+        }
+        return accepted
+    }
 
     /**
      * Resolve the API client, converting any *construction* failure (e.g. a

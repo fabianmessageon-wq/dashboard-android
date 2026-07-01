@@ -180,8 +180,8 @@ class CaptureViewModelTest {
             createdTaskId = 9,
             mode = CaptureMode.TASK_FALLBACK,
         )
-        override suspend fun uploadWatchHealth(
-            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        override suspend fun uploadWatchHealthDto(
+            dto: dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult =
             dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult(accepted = true)
         override suspend fun getJaredFeed() =
@@ -203,8 +203,8 @@ class CaptureViewModelTest {
         override suspend fun startFocus(taskId: Int?, durationMinutes: Int?): FocusStartResult = fail()
         override suspend fun capture(title: String): CaptureResult = fail()
         override suspend fun chat(message: String): CaptureResult = fail()
-        override suspend fun uploadWatchHealth(
-            batch: dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch,
+        override suspend fun uploadWatchHealthDto(
+            dto: dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto,
         ): dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult = fail()
         override suspend fun getJaredFeed(): dev.jaredhq.dashboardandroid.domain.model.JaredFeed = fail()
         override suspend fun getDailyIntelligenceSettings():
