@@ -1540,6 +1540,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             } else {
                 _connectionState.value = WatchEngineConnectionState.CONNECTED
             }
+            // System (Classic BT) bond — separate from the SDK's GATT bind. Call audio/HFP and the
+            // watch appearing in Android's Bluetooth settings ride on it. The pre-SDK clean-room
+            // stack requested it (createBond) but that was lost when the stack was deleted
+            // (19bef55); since then nothing ever asked Android to pair. Deferred a beat so the
+            // pairing prompt never races the link setup / bind window.
+            android.os.Handler(android.os.Looper.getMainLooper())
+                .postDelayed({ ensureSystemBond() }, SYSTEM_BOND_DELAY_MS)
         }
 
         override fun onInitCompleted(mac: String?) {
@@ -1577,6 +1584,31 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
+    }
+
+    /**
+     * Ensure the watch is bonded at the ANDROID level (Classic BT pairing — the system dialog).
+     * Restores the deleted clean-room stack's behaviour: without this bond the watch never shows
+     * in Bluetooth settings and HFP call audio can't route. No-op when already bonded/bonding.
+     */
+    private fun ensureSystemBond() {
+        val mac = targetMac ?: return
+        if (!isConnected()) return
+        runCatching {
+            val adapter =
+                (app.getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)
+                    ?.adapter ?: return
+            val device = adapter.getRemoteDevice(mac)
+            when (device.bondState) {
+                android.bluetooth.BluetoothDevice.BOND_NONE -> {
+                    Log.i(TAG, "system bond missing for $mac → createBond() (Android shows the pairing prompt)")
+                    Log.i(TAG, "createBond dispatched=${device.createBond()}")
+                }
+                android.bluetooth.BluetoothDevice.BOND_BONDING ->
+                    Log.i(TAG, "system bond for $mac already in progress")
+                else -> Log.i(TAG, "system bond for $mac already present")
+            }
+        }.onFailure { Log.w(TAG, "ensureSystemBond failed (BLUETOOTH_CONNECT granted?)", it) }
     }
 
     private val bindCallBack = object : BindCallBack.ICallBack {
@@ -2357,6 +2389,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         /** How long a watch-face bind rejection suppresses auto-reconnect (prompt anti-spam). */
         const val BIND_REJECT_COOLDOWN_MS = 5 * 60_000L
+
+        /** Beat between the GATT link settling and requesting the system (Classic) bond. */
+        const val SYSTEM_BOND_DELAY_MS = 3_000L
 
         /**
          * How long the connect may go with NO progress callback while still SCANNING/CONNECTING
