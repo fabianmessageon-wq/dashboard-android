@@ -78,8 +78,9 @@ class WatchSyncWorker(
      * Each is deduped per (server-computed) date via [NotificationState] using watch-specific flags
      * (independent of the native notification channel), and only marked "pushed" once the engine
      * actually dispatched it — so a failed send retries on the next sync. Reminders mirror the native
-     * bridge's policy (EVENT/DEADLINE only) and are capped per run so the watch never gets a buzz
-     * storm; if a send fails (the link dropped) the loop stops early.
+     * bridge's policy (EVENT/DEADLINE as they appear; standalone REMINDERs once due) and are capped
+     * per run so the watch never gets a buzz storm; if a send fails (the link dropped) the loop
+     * stops early.
      */
     private suspend fun pushPendingToWatch(engine: WatchEngine) {
         val state = NotificationState(applicationContext)
@@ -95,7 +96,14 @@ class WatchSyncWorker(
             var pushed = 0
             for (item in feed.items) {
                 if (pushed >= MAX_WATCH_REMINDERS) break
-                if (item.kind != NotificationKind.EVENT && item.kind != NotificationKind.DEADLINE) continue
+                val pushable = when (item.kind) {
+                    NotificationKind.EVENT, NotificationKind.DEADLINE -> true
+                    // Same policy as NotificationWorker: only buzz for a reminder once it's due.
+                    NotificationKind.REMINDER ->
+                        item.whenEpoch != null && item.whenEpoch <= System.currentTimeMillis() / 1000
+                    else -> false
+                }
+                if (!pushable) continue
                 if (state.reminderAlreadyPushedToWatch(feed.date, item.id)) continue
                 val body = item.timeLabel?.let { "$it · ${item.title}" } ?: item.title
                 if (!engine.sendNotification(WatchNotification(appName = "Reminder", body = body))) {

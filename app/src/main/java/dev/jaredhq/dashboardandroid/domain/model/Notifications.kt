@@ -34,6 +34,9 @@ enum class NotificationKind(val wire: String) {
     DEADLINE("deadline"),
     HABIT("habit"),
     WARNING("warning"),
+
+    /** A standalone dashboard reminder (payload v2). */
+    REMINDER("reminder"),
     UNKNOWN("unknown");
 
     companion object {
@@ -43,6 +46,7 @@ enum class NotificationKind(val wire: String) {
             "deadline" -> DEADLINE
             "habit" -> HABIT
             "warning" -> WARNING
+            "reminder" -> REMINDER
             else -> UNKNOWN
         }
     }
@@ -64,6 +68,8 @@ data class NotificationCounts(
     val events: Int,
     val deadlines: Int,
     val habitsRemaining: Int,
+    /** Standalone reminders due/overdue (payload v2; 0 from a v1 server). */
+    val reminders: Int = 0,
 )
 
 data class NotificationsPayload(

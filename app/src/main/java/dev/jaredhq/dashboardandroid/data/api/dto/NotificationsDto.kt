@@ -40,6 +40,8 @@ data class NotificationCountsDto(
     val events: Int = 0,
     val deadlines: Int = 0,
     val habitsRemaining: Int = 0,
+    // Payload v2; defaults keep a v1 server parseable.
+    val reminders: Int = 0,
 )
 
 fun NotificationItemDto.toDomain(): NotificationItem = NotificationItem(
@@ -54,7 +56,12 @@ fun NotificationItemDto.toDomain(): NotificationItem = NotificationItem(
 )
 
 fun NotificationCountsDto.toDomain(): NotificationCounts =
-    NotificationCounts(events = events, deadlines = deadlines, habitsRemaining = habitsRemaining)
+    NotificationCounts(
+        events = events,
+        deadlines = deadlines,
+        habitsRemaining = habitsRemaining,
+        reminders = reminders,
+    )
 
 fun NotificationsPayloadDto.toDomain(): NotificationsPayload = NotificationsPayload(
     version = version,
