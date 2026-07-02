@@ -146,7 +146,63 @@ class WatchConnectionService : Service() {
             WatchControlEvent.FIND_PHONE_START -> startFindPhoneAlert()
             // The watch itself ended the search — just quiet down, no stop command back.
             WatchControlEvent.FIND_PHONE_STOP -> stopFindPhoneAlert(tellWatch = false)
+            WatchControlEvent.CAMERA_OPEN -> openRemoteCamera()
+            // Handled by RemoteCameraActivity while it's open; nothing to do from here.
+            WatchControlEvent.CAMERA_CLOSE, WatchControlEvent.CAMERA_TAKE_PHOTO -> Unit
         }
+    }
+
+    // ── Remote camera (watch → phone) ─────────────────────────────────────────────────
+
+    /**
+     * The watch opened its remote-shutter screen. A background service can't reliably start an
+     * activity on Android 10+ — try the direct start (works when the app is foreground) and post
+     * a heads-up notification as the dependable path (the user just touched the watch, so a
+     * one-tap notification is an acceptable extra step).
+     */
+    private fun openRemoteCamera() {
+        val intent = Intent(this, dev.jaredhq.dashboardandroid.ui.camera.RemoteCameraActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        ensureCameraChannel()
+        val n = NotificationCompat.Builder(this, CAMERA_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setColor(getColor(R.color.brand_accent))
+            .setContentTitle(getString(R.string.remote_camera_title))
+            .setContentText(getString(R.string.remote_camera_text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)?.notify(CAMERA_NOTIF_ID, n)
+    }
+
+    // High-importance so the "camera requested from the watch" prompt heads-up immediately
+    // (the always-on link channel is deliberately low-importance and would bury it).
+    private fun ensureCameraChannel() {
+        val mgr = getSystemService(NotificationManager::class.java) ?: return
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CAMERA_CHANNEL,
+                getString(R.string.channel_remote_camera_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = getString(R.string.channel_remote_camera_desc)
+                setShowBadge(false)
+            },
+        )
     }
 
     // ── Find-phone (watch → phone) ────────────────────────────────────────────────────
@@ -271,7 +327,9 @@ class WatchConnectionService : Service() {
     companion object {
         private const val TAG = "WatchConnService"
         private const val CHANNEL = "watch_link"
+        private const val CAMERA_CHANNEL = "remote_camera"
         private const val NOTIF_ID = 1002
+        private const val CAMERA_NOTIF_ID = 1004
         private const val SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6h
         private const val WEATHER_INTERVAL_MS = 60 * 60 * 1000L // 1h (pusher self-rate-limits too)
         private const val CONNECT_SETTLE_MS = 20_000L

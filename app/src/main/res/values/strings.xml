@@ -32,4 +32,10 @@
     <string name="find_phone_title">Finding this phone</string>
     <string name="find_phone_text">Your watch is looking for this phone.</string>
     <string name="find_phone_found_action">Found it</string>
+
+    <!-- Remote camera requested from the watch (WatchConnectionService → RemoteCameraActivity). -->
+    <string name="channel_remote_camera_name">Remote camera</string>
+    <string name="channel_remote_camera_desc">Opens the camera when you start the remote shutter on your watch.</string>
+    <string name="remote_camera_title">Remote camera</string>
+    <string name="remote_camera_text">Your watch wants to take a photo — tap to open the camera.</string>
 </resources>

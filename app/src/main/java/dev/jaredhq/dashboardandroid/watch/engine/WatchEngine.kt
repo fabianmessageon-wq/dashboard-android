@@ -155,6 +155,17 @@ interface WatchEngine {
     fun supportsWeatherPush(): Boolean? = false
 
     /**
+     * Tell the watch the phone camera is open, so it shows its remote-shutter screen (wrist taps
+     * then arrive as [WatchControlEvent.CAMERA_TAKE_PHOTO]). Returns whether the command was
+     * dispatched. Pair every successful call with [exitCameraMode] when the camera closes.
+     * Default: a no-op returning false, so engines without camera control compile unchanged.
+     */
+    fun enterCameraMode(): Boolean = false
+
+    /** Leave remote-shutter mode on the watch. Safe to call when not in camera mode. */
+    fun exitCameraMode() {}
+
+    /**
      * Push a weather snapshot to the watch face. Fire-and-forget like [sendNotification]; returns
      * whether it was dispatched to the transport (false when disconnected or unsupported).
      * Default: a no-op returning false, so engines without weather support compile unchanged.
@@ -186,7 +197,7 @@ enum class WatchNotificationCategory {
     MISSED_CALL,
 }
 
-/** A control action the watch asks the phone to perform (W7 call control, find-phone). */
+/** A control action the watch asks the phone to perform (W7 call control, find-phone, camera). */
 enum class WatchControlEvent {
     ANSWER_CALL,
     REJECT_CALL,
@@ -197,4 +208,13 @@ enum class WatchControlEvent {
 
     /** The watch cancelled its find-phone request (e.g. stopped from the wrist). */
     FIND_PHONE_STOP,
+
+    /** The watch entered its remote-shutter screen — open the phone camera. */
+    CAMERA_OPEN,
+
+    /** The watch left its remote-shutter screen — close the phone camera. */
+    CAMERA_CLOSE,
+
+    /** Wrist shutter tap — take a photo now (covers single and burst requests). */
+    CAMERA_TAKE_PHOTO,
 }

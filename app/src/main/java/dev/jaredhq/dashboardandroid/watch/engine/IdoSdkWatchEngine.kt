@@ -878,6 +878,25 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "stopFindPhone failed", it) }
     }
 
+    // ── Remote camera (watch shutter) ──────────────────────────────────────────────────
+
+    override fun enterCameraMode(): Boolean {
+        if (!isConnected()) return false
+        return runCatching {
+            Log.i(TAG, "enterCameraMode")
+            BLEManager.enterCameraMode()
+            true
+        }.onFailure { Log.w(TAG, "enterCameraMode failed", it) }.getOrDefault(false)
+    }
+
+    override fun exitCameraMode() {
+        if (!isConnected()) return
+        runCatching {
+            Log.i(TAG, "exitCameraMode")
+            BLEManager.exitCameraMode()
+        }.onFailure { Log.w(TAG, "exitCameraMode failed", it) }
+    }
+
     // ── Weather push (phone → watch) ───────────────────────────────────────────────────
 
     override fun supportsWeatherPush(): Boolean? {
@@ -1574,6 +1593,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     WatchControlEvent.REJECT_CALL
                 com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.MUTE_PHONE ->
                     WatchControlEvent.MUTE_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.OPEN_CAMERA ->
+                    WatchControlEvent.CAMERA_OPEN
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.CLOSE_CAMERA ->
+                    WatchControlEvent.CAMERA_CLOSE
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.TAKE_ONE_PHOTO,
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.TAKE_MULTI_PHOTO,
+                ->
+                    WatchControlEvent.CAMERA_TAKE_PHOTO
                 else -> null
             }
             if (event != null) {
