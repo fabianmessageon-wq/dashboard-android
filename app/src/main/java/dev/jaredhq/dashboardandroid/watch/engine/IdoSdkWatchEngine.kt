@@ -1007,6 +1007,11 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             return false
         }
         return runCatching {
+            // Enable the watch's weather feature first — without this the watch face keeps showing
+            // "Connect to the App to enable weather notification" and discards pushed data.
+            // VeryFit sends it at bind success (SearchAndBindPresenter) + from its weather settings;
+            // idempotent, so sending before every data push is safe.
+            BLEManager.setWeatherSwitch(true)
             if (info.V3_support_set_weather_sun_time && weather.sunrise != null && weather.sunset != null) {
                 BLEManager.setWeatherSunTime(
                     com.ido.ble.protocol.model.WeatherSunTime().apply {
