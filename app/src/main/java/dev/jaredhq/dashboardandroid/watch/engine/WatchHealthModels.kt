@@ -96,6 +96,24 @@ data class WatchWorkout(
     val vo2Max: Int?,
 )
 
+/** One GPS fix on a recorded route. */
+data class WatchGpsPoint(
+    val latitude: Double,
+    val longitude: Double,
+)
+
+/**
+ * A recorded GPS route (v2 `HealthGps` + its `HealthGpsItem` fixes). The watch reports a start
+ * wall-clock + a fixed sampling interval; each point is [intervalSeconds] after the previous one.
+ * Routes aren't wired to a workout id on the wire — the dashboard associates a route with the
+ * workout that shares its start window at read time.
+ */
+data class WatchGpsRoute(
+    val startDateTime: String, // YYYY-MM-DD HH:MM:SS
+    val intervalSeconds: Int?,
+    val points: List<WatchGpsPoint>,
+)
+
 /**
  * Intraday point metrics delivered through the V3 sync as a parent day record + a list of items.
  *
@@ -173,6 +191,9 @@ interface WatchHealthListener {
     /** A V3 workout/sport session (this is how V3 devices like the Active 4 Pro report exercise). */
     fun onWorkout(workout: WatchWorkout) {}
 
+    /** A recorded GPS route (one complete route per call). */
+    fun onGpsRoute(route: WatchGpsRoute) {}
+
     // V3 intraday point metrics (one call per sample).
     fun onSpo2Reading(reading: WatchSpo2Reading) {}
     fun onHrvReading(reading: WatchHrvReading) {}
@@ -206,6 +227,7 @@ data class WatchHealthBatch(
     val bloodPressureReadings: List<WatchBloodPressureReading> = emptyList(),
     val stressReadings: List<WatchStressReading> = emptyList(),
     val heartRateReadings: List<WatchHeartRateReading> = emptyList(),
+    val gpsRoutes: List<WatchGpsRoute> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = activityDays.isEmpty() && heartRateDays.isEmpty() &&
@@ -213,13 +235,15 @@ data class WatchHealthBatch(
             spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
             respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
             bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
-            stressReadings.isEmpty() && heartRateReadings.isEmpty()
+            stressReadings.isEmpty() && heartRateReadings.isEmpty() &&
+            gpsRoutes.isEmpty()
 
     val recordCount: Int
         get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size +
             spo2Readings.size + hrvReadings.size + respiratoryReadings.size +
             temperatureReadings.size + bodyEnergyReadings.size +
-            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size
+            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size +
+            gpsRoutes.size
 }
 
 /**

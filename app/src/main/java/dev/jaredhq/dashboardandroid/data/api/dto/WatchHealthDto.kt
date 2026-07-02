@@ -3,6 +3,7 @@ package dev.jaredhq.dashboardandroid.data.api.dto
 import dev.jaredhq.dashboardandroid.watch.engine.WatchActivityDay
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBloodPressureReading
 import dev.jaredhq.dashboardandroid.watch.engine.WatchBodyEnergyReading
+import dev.jaredhq.dashboardandroid.watch.engine.WatchGpsRoute
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHeartRateDay
@@ -46,6 +47,7 @@ data class WatchHealthUploadDto(
     val bloodPressureReadings: List<WatchBloodPressureReadingDto> = emptyList(),
     val stressReadings: List<WatchStressReadingDto> = emptyList(),
     val heartRateReadings: List<WatchHeartRateReadingDto> = emptyList(),
+    val gpsRoutes: List<WatchGpsRouteDto> = emptyList(),
 ) {
     /** Total records across every list — mirrors [WatchHealthBatch.recordCount] for the wire form
      *  (used when a spooled DTO is re-sent without its originating batch). */
@@ -53,7 +55,8 @@ data class WatchHealthUploadDto(
         get() = activityDays.size + heartRateDays.size + sleepSessions.size + workouts.size +
             spo2Readings.size + hrvReadings.size + respiratoryReadings.size +
             temperatureReadings.size + bodyEnergyReadings.size +
-            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size
+            bloodPressureReadings.size + stressReadings.size + heartRateReadings.size +
+            gpsRoutes.size
 }
 
 @Serializable
@@ -190,6 +193,20 @@ data class WatchHeartRateReadingDto(
 )
 
 /**
+ * A recorded GPS route. [points] is `[lat, lon]` pairs in sample order (fixed [intervalSeconds]
+ * between fixes, starting at [startedAt]) — compact, and the server stores the trail as one JSON
+ * column rather than a row per fix.
+ */
+@Serializable
+data class WatchGpsRouteDto(
+    val date: String,
+    /** Epoch seconds of the route start (watch local time interpreted in the phone's zone). */
+    val startedAt: Long,
+    val intervalSeconds: Int? = null,
+    val points: List<List<Double>> = emptyList(),
+)
+
+/**
  * Server acknowledgement. Defensively defaulted like the other widget DTOs so a contract skew (or
  * an empty 2xx body) degrades to "accepted" rather than failing the sync.
  */
@@ -215,6 +232,7 @@ fun WatchHealthBatch.toDto(): WatchHealthUploadDto = WatchHealthUploadDto(
     bloodPressureReadings = bloodPressureReadings.map { it.toDto() },
     stressReadings = stressReadings.map { it.toDto() },
     heartRateReadings = heartRateReadings.map { it.toDto() },
+    gpsRoutes = gpsRoutes.map { it.toDto() },
 )
 
 private fun WatchActivityDay.toDto() = WatchActivityDayDto(
@@ -282,6 +300,13 @@ private fun WatchWorkout.toDto() = WatchWorkoutDto(
     avgHeartRate = avgHeartRate,
     maxHeartRate = maxHeartRate,
     minHeartRate = minHeartRate,
+)
+
+private fun WatchGpsRoute.toDto() = WatchGpsRouteDto(
+    date = startDateTime.take(10),
+    startedAt = localWallClockEpochSeconds(startDateTime),
+    intervalSeconds = intervalSeconds,
+    points = points.map { listOf(it.latitude, it.longitude) },
 )
 
 private fun WatchSpo2Reading.toDto() = WatchSpo2ReadingDto(

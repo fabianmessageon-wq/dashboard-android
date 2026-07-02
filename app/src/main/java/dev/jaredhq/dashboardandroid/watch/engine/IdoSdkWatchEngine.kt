@@ -2019,8 +2019,32 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.DRINK_PLAN, parentRecords = 1)
         }
+        // One complete route per call (VeryFit's SyncDeviceDataProxy.processGpsData consumes it the
+        // same way, ignoring isLast — that flag only marks the end of the multi-record stream).
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {
-            if (data != null) diagnostics.record(WatchSyncDiagnostics.GPS_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+            if (data == null) return
+            diagnostics.record(WatchSyncDiagnostics.GPS_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+            val points = items.orEmpty().mapNotNull { item ->
+                val lat = item.latitude ?: return@mapNotNull null
+                val lon = item.longitude ?: return@mapNotNull null
+                // (0,0) is the watch's "no fix" filler, not a real position off the Ghanaian coast.
+                if (lat == 0.0 && lon == 0.0) null else WatchGpsPoint(latitude = lat, longitude = lon)
+            }
+            if (points.isEmpty()) return
+            listener?.onGpsRoute(
+                WatchGpsRoute(
+                    startDateTime = WatchTime.ymdhms(
+                        data.year ?: 0,
+                        data.month ?: 0,
+                        data.day ?: 0,
+                        data.hour ?: 0,
+                        data.minute ?: 0,
+                        data.second ?: 0,
+                    ),
+                    intervalSeconds = data.data_interval,
+                    points = points,
+                ),
+            )
         }
         override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.BODY_COMPOSITION, parentRecords = 1)

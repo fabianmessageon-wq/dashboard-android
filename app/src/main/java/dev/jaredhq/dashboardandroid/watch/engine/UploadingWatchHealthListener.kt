@@ -45,6 +45,7 @@ class UploadingWatchHealthListener(
     private val bloodPressureReadings = mutableListOf<WatchBloodPressureReading>()
     private val stressReadings = mutableListOf<WatchStressReading>()
     private val heartRateReadings = mutableListOf<WatchHeartRateReading>()
+    private val gpsRoutes = mutableListOf<WatchGpsRoute>()
 
     override fun onActivityDay(day: WatchActivityDay) {
         logPrivateRecord("ACTIVITY", day)
@@ -64,6 +65,13 @@ class UploadingWatchHealthListener(
     override fun onWorkout(workout: WatchWorkout) {
         logPrivateRecord("WORKOUT", workout)
         synchronized(lock) { workouts += workout }
+    }
+
+    override fun onGpsRoute(route: WatchGpsRoute) {
+        // Log the shape only — a full coordinate trail is location data, too sensitive even for
+        // debug logcat (CLAUDE.md: no GPS tracks in developer-facing logs by default).
+        logPrivateRecord("GPS_ROUTE", "start=${route.startDateTime} points=${route.points.size}")
+        synchronized(lock) { gpsRoutes += route }
     }
 
     override fun onSpo2Reading(reading: WatchSpo2Reading) {
@@ -127,7 +135,8 @@ class UploadingWatchHealthListener(
                 spo2Readings.isEmpty() && hrvReadings.isEmpty() &&
                 respiratoryReadings.isEmpty() && temperatureReadings.isEmpty() &&
                 bodyEnergyReadings.isEmpty() && bloodPressureReadings.isEmpty() &&
-                stressReadings.isEmpty() && heartRateReadings.isEmpty()
+                stressReadings.isEmpty() && heartRateReadings.isEmpty() &&
+                gpsRoutes.isEmpty()
             ) {
                 return
             }
@@ -145,6 +154,7 @@ class UploadingWatchHealthListener(
                 bloodPressureReadings = bloodPressureReadings.toList(),
                 stressReadings = stressReadings.toList(),
                 heartRateReadings = heartRateReadings.toList(),
+                gpsRoutes = gpsRoutes.toList(),
             ).also {
                 activityDays.clear()
                 heartRateDays.clear()
@@ -158,6 +168,7 @@ class UploadingWatchHealthListener(
                 bloodPressureReadings.clear()
                 stressReadings.clear()
                 heartRateReadings.clear()
+                gpsRoutes.clear()
             }
         }
 
