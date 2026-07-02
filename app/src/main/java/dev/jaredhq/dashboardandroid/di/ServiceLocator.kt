@@ -51,8 +51,23 @@ object ServiceLocator {
     /** App-lifetime main-thread scope for Android media-session callbacks and watch controls. */
     private val watchMusicScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** The single bound watch (Active 4 Pro) MAC — used as the dashboard device id + connect target. */
-    const val watchDeviceId = "F4:91:29:51:C6:45"
+    /** Factory default: Fabian's Active 4 Pro. Overridable via [watchDeviceId] (persisted). */
+    private const val DEFAULT_WATCH_MAC = "F4:91:29:51:C6:45"
+    private const val WATCH_PREFS = "watch_pairing"
+    private const val KEY_WATCH_MAC = "watch_mac"
+
+    /**
+     * The bound watch's MAC — the connect target and the dashboard device id. Persisted so a
+     * replacement watch can be paired without a rebuild (first step of real pairing; a scan-and-pick
+     * UI can write this). Reads fall back to the factory default.
+     */
+    var watchDeviceId: String
+        get() = appContext.getSharedPreferences(WATCH_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_WATCH_MAC, DEFAULT_WATCH_MAC) ?: DEFAULT_WATCH_MAC
+        set(value) {
+            appContext.getSharedPreferences(WATCH_PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_WATCH_MAC, value.trim().uppercase()).apply()
+        }
 
     /**
      * Optional second sink for decoded health records, set by the product Watch screen's ViewModel

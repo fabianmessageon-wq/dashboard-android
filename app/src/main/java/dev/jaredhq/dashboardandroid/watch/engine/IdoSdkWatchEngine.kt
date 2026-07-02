@@ -2125,6 +2125,23 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 "onboard=${readFunctionFlag("V3_support_v3_ble_music")}, " +
                 "appSpp=${readFunctionFlag("support_app_connect_with_spp")}",
         )
+        // On-watch UI customization surface (sport-list + menu reorder/select; see
+        // docs/plans — these gate setSportModeSortInfoV3 / setMenuListV3 feasibility).
+        Log.i(
+            TAG,
+            "customization flags: sport_sort=${readFunctionFlag("sport_mode_sort")}, " +
+                "sport_show_num=${readFunctionFlag("sport_show_num")}, " +
+                "v3_sports_type=${readFunctionFlag("ex_table_main7_v3_sports_type")}, " +
+                "v3_sport_sort_field=${readFunctionFlag("V3_support_v3_get_sport_sort_field")}, " +
+                "no_add_delete=${readFunctionFlag("not_support_delete_add_sport_sort")}, " +
+                "sport100=${readFunctionFlag("V3_set_100_sport_sort")}, " +
+                "menu_list_v3=${readFunctionFlag("support_protocol_v3_menu_list")}, " +
+                "get_menu_v3=${readFunctionFlag("V3_get_menu_list")}, " +
+                "menu_main7=${readFunctionFlag("ex_main7_menu_list")}, " +
+                "shortcut=${readFunctionFlag("shortcut")}, " +
+                "weather_v3=${readFunctionFlag("V3_support_set_v3_weather")}, " +
+                "over_find_phone=${readFunctionFlag("support_over_find_phone")}",
+        )
     }
 
     /**
