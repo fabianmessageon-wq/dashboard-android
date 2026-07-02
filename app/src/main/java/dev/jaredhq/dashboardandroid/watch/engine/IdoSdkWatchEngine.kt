@@ -1563,7 +1563,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onDeviceInNotBindStatus(mac: String?) {
-            Log.i(TAG, "onDeviceInNotBindStatus $mac (bind() driven from onConnectSuccess)")
+            // The WATCH's authoritative "you are not bound to me" — fired when another app
+            // (VeryFit) re-claimed it since our last session. The SDK's local DB still says
+            // isBind()=true, so onConnectSuccess's stale-flag check skips bind(): the app then
+            // connects but has NO control and the watch never releases its buffered health data
+            // (real data loss once VeryFit pulls it). Trust the watch over the local flag and
+            // re-bind to reclaim — may prompt a confirmation on the watch face (onNeedAuth).
+            Log.w(TAG, "onDeviceInNotBindStatus $mac — watch says we're NOT bound (stale local bind); re-binding to reclaim")
+            _connectionState.value = WatchEngineConnectionState.BINDING
+            runCatching { BLEManager.bind() }
+                .onFailure { Log.w(TAG, "re-bind after onDeviceInNotBindStatus failed", it) }
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
