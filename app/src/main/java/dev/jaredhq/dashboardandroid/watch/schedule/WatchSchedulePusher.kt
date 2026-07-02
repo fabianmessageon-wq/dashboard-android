@@ -40,7 +40,15 @@ class WatchSchedulePusher(
                         it.whenEpoch != null && it.whenEpoch > nowSec
                 }
                 .sortedBy { it.whenEpoch }
-                .map { WatchScheduleEntry(title = it.title, note = it.detail, epochSeconds = it.whenEpoch!!) }
+                // note falls back to the title: the watch's schedule block renders the note as its
+                // body text (a stored title alone shows an empty block with just the time).
+                .map {
+                    WatchScheduleEntry(
+                        title = it.title,
+                        note = it.detail?.takeIf { d -> d.isNotBlank() } ?: it.title,
+                        epochSeconds = it.whenEpoch!!,
+                    )
+                }
 
             // Signature of what the watch should show; unchanged ⇒ nothing to send. Date is part
             // of it so a new day always refreshes (clearing yesterday's entries).

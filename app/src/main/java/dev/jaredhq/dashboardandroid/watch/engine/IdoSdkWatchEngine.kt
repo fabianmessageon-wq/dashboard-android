@@ -955,21 +955,20 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     com.ido.ble.protocol.model.ScheduleReminderSwitch().apply { notify_flag = 3 },
                 )
             }
-            if (hasPushedScheduleThisSession) {
-                // Clear our slot range before re-adding. Ids are ours — VeryFit assigns its own
-                // from its DB and deletes match on id, so this never touches other apps' entries.
-                step {
-                    BLEManager.deleteScheduleReminderV3(
-                        (1..capacity).map { slot -> scheduleReminderFor(slot, null) },
-                    )
-                }
+            // Always clear our slot range before re-adding — an app restart or watch reset can
+            // leave stale slots no in-memory flag can see (observed: a blank leftover block from
+            // the prior session). Ids are ours — VeryFit assigns its own from its DB and deletes
+            // match on id, so this never touches other apps' entries. Safe now that ops are spaced.
+            step {
+                BLEManager.deleteScheduleReminderV3(
+                    (1..capacity).map { slot -> scheduleReminderFor(slot, null) },
+                )
             }
             if (toSend.isNotEmpty()) {
                 step {
                     BLEManager.addScheduleReminderV3(
                         toSend.mapIndexed { i, e -> scheduleReminderFor(i + 1, e) },
                     )
-                    hasPushedScheduleThisSession = true
                 }
             }
             // Closed-loop verification: ask the watch what it now stores; the reply lands in
@@ -981,9 +980,6 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "pushSchedule failed", it) }.getOrDefault(false)
     }
 
-    /** Whether this app has written schedule slots since the last connect (gates the range clear). */
-    @Volatile
-    private var hasPushedScheduleThisSession = false
 
     /** Build the SDK model for slot [id]; a null [entry] makes a delete-marker for that slot. */
     private fun scheduleReminderFor(
@@ -998,8 +994,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             setRepeat_type(1)
             setWeekRepeat(BooleanArray(7))
             if (entry != null) {
+                // VeryFit's add UI caps: title 70, note 140.
                 setTitle(entry.title.take(SCHEDULE_TITLE_MAX))
-                setNote(entry.note?.take(SCHEDULE_TITLE_MAX) ?: "")
+                setNote(entry.note?.take(SCHEDULE_NOTE_MAX) ?: "")
                 val cal = java.util.Calendar.getInstance().apply {
                     timeInMillis = entry.epochSeconds * 1000
                 }
@@ -2529,7 +2526,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         /** App-owned schedule slots on the watch (fallback when the table advertises no count). */
         const val SCHEDULE_MAX_SLOTS = 8
-        const val SCHEDULE_TITLE_MAX = 60
+        const val SCHEDULE_TITLE_MAX = 70
+        const val SCHEDULE_NOTE_MAX = 140
         const val SCHEDULE_QUERY_DELAY_MS = 2_500L
         const val SCHEDULE_STEP_SPACING_MS = 700L
 
