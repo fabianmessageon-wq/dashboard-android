@@ -39,7 +39,17 @@ class OpenMeteoWeatherProvider(
             .onFailure { Log.w(TAG, "forecast fetch failed", it) }.getOrNull()
     }
 
+    // ipwho.is first (keyless, tolerant of app clients); ipapi.co as fallback — the latter
+    // 403s okhttp's default user-agent, hence the explicit UA on every request.
     private fun geolocate(): IpLocation? {
+        get("https://ipwho.is/")?.let { body ->
+            runCatching {
+                val dto = json.decodeFromString<IpWhoDto>(body)
+                if (dto.success != false && dto.latitude != null && dto.longitude != null) {
+                    return IpLocation(dto.latitude, dto.longitude, dto.city ?: "")
+                }
+            }
+        }
         val body = get("https://ipapi.co/json/") ?: return null
         val dto = json.decodeFromString<IpApiDto>(body)
         val lat = dto.latitude ?: return null
@@ -115,7 +125,11 @@ class OpenMeteoWeatherProvider(
     }
 
     private fun get(url: String): String? {
-        client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "dashboard-android-weather/1.0")
+            .build()
+        client.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) {
                 Log.w(TAG, "GET $url → ${resp.code}")
                 return null
@@ -157,6 +171,14 @@ private data class IpLocation(val latitude: Double, val longitude: Double, val c
 
 @Serializable
 private data class IpApiDto(
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val city: String? = null,
+)
+
+@Serializable
+private data class IpWhoDto(
+    val success: Boolean? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val city: String? = null,
