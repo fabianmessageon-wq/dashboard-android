@@ -105,9 +105,9 @@ object JaredNotifier {
         JaredCategory.MORNING -> CHANNEL_MORNING
         JaredCategory.MIDDAY -> CHANNEL_MIDDAY
         JaredCategory.EVENING -> CHANNEL_EVENING
-        // RESULT, and any never-posted PREFERENCE that slips through, land on the
-        // calm "plan updates" channel.
-        JaredCategory.RESULT, JaredCategory.PREFERENCE -> CHANNEL_RESULT
+        // RESULT — and any never-posted PREFERENCE/INSIGHT that slips through —
+        // lands on the calm "plan updates" channel.
+        JaredCategory.RESULT, JaredCategory.PREFERENCE, JaredCategory.INSIGHT -> CHANNEL_RESULT
     }
 
     private fun priorityFor(category: JaredCategory): Int = when (category) {
@@ -140,6 +140,7 @@ object JaredNotifier {
         JaredCategory.EVENING -> "See today's reflection."
         JaredCategory.RESULT -> "Open Daily Intelligence."
         JaredCategory.PREFERENCE -> "Jared updated a preference."
+        JaredCategory.INSIGHT -> "See today's insight."
     }
 
     /**
