@@ -277,7 +277,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         connectWatchdogHandler.postDelayed(connectWatchdogRunnable, CONNECT_STALL_MS)
     }
 
+    // The user explicitly rejected/cancelled the bind on the watch face. The always-on service
+    // reconnects on a ~60s loop, and every reconnect of an unbound watch re-runs bind() — which
+    // re-pops the watch's pairing prompt. Honour the rejection with a cooldown so the prompt isn't
+    // spammed; an explicit user connect can be re-tried after it lapses (or app restart).
+    @Volatile
+    private var bindRejectedAtMs = 0L
+
     override fun connect(macAddress: String) {
+        val sinceReject = System.currentTimeMillis() - bindRejectedAtMs
+        if (bindRejectedAtMs != 0L && sinceReject < BIND_REJECT_COOLDOWN_MS) {
+            Log.w(
+                TAG,
+                "connect ignored — bind was rejected on the watch ${sinceReject / 1000}s ago " +
+                    "(cooldown ${BIND_REJECT_COOLDOWN_MS / 1000}s, so the watch prompt isn't re-spammed)",
+            )
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+            return
+        }
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
         targetMac = macAddress.uppercase()
@@ -1471,7 +1488,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private val scanCallBack = object : ScanCallBack.ICallBack {
         override fun onStart() { noteConnectProgress(); Log.i(TAG, "scan started (target=$targetMac)") }
-        override fun onScanFinished() { noteConnectProgress(); Log.i(TAG, "scan finished") }
+        override fun onScanFinished() {
+            noteConnectProgress()
+            Log.i(TAG, "scan finished")
+            // Still SCANNING here means the whole scan completed WITHOUT finding the target (a
+            // match would have moved us to CONNECTING). Fail the attempt now — retrying after the
+            // short backoff — instead of letting the 90s stall watchdog time the silence out. The
+            // watchdog window is for mid-CONNECT wedges; a finished-but-empty scan is a known outcome
+            // and waiting it out left the UI stuck on "Scanning…" for minutes (pairing regression
+            // vs the original single-shot scan, which surfaced the miss immediately).
+            if (targetMac != null && _connectionState.value == WatchEngineConnectionState.SCANNING) {
+                handleConnectAttemptFailed("scan finished without finding $targetMac")
+            }
+        }
         override fun onFindDevice(device: BLEDevice?) {
             noteConnectProgress()
             val addr = device?.mDeviceAddress ?: return
@@ -1553,6 +1582,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     private val bindCallBack = object : BindCallBack.ICallBack {
         override fun onSuccess() {
             Log.i(TAG, "BIND SUCCESS — watch claimed by our app; fetching function table then syncing")
+            bindRejectedAtMs = 0L
             _connectionState.value = WatchEngineConnectionState.CONNECTED
             // Now that bind has actually completed, the device will release its data. Give the
             // link a beat to settle (Classic profiles re-attach right after bind), then syncHealth()
@@ -1564,11 +1594,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             _connectionState.value = WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
         }
         override fun onReject() {
-            Log.w(TAG, "bind REJECTED on the watch")
+            Log.w(TAG, "bind REJECTED on the watch — pausing auto-reconnect (cooldown)")
+            bindRejectedAtMs = System.currentTimeMillis()
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onCancel() {
-            Log.w(TAG, "bind cancelled")
+            Log.w(TAG, "bind cancelled — pausing auto-reconnect (cooldown)")
+            bindRejectedAtMs = System.currentTimeMillis()
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onFailed(error: BindCallBack.BindFailedError?) {
@@ -2322,6 +2354,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
         const val MAX_CONNECT_RETRIES = 2
         const val CONNECT_RETRY_DELAY_MS = 2_000L
+
+        /** How long a watch-face bind rejection suppresses auto-reconnect (prompt anti-spam). */
+        const val BIND_REJECT_COOLDOWN_MS = 5 * 60_000L
 
         /**
          * How long the connect may go with NO progress callback while still SCANNING/CONNECTING
