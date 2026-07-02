@@ -19,6 +19,8 @@
     <!-- Re-arm the always-on watch link after a reboot/update (W7 BootReceiver), so calls/texts keep
          mirroring without the user reopening the app. The receiver self-gates via syncRunState. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Buzz the phone when the watch triggers find-phone (FindPhoneAlerter). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- BLE permissions — Android 12+ (API 31) uses BLUETOOTH_SCAN / BLUETOOTH_CONNECT.
          Runtime-requested on the Watch tab; BLUETOOTH / BLUETOOTH_ADMIN are for API < 31. -->

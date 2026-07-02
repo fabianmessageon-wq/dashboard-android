@@ -864,6 +864,20 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "stopIncomingCall failed", it) }
     }
 
+    override fun stopFindPhone() {
+        if (!isConnected()) return
+        // Only newer firmwares understand the explicit stop command (VeryFit gates it the same way);
+        // older ones just time their find-phone screen out on their own.
+        if (cachedFunctionInfo?.support_over_find_phone != true) {
+            Log.i(TAG, "stopFindPhone skipped — watch doesn't advertise support_over_find_phone")
+            return
+        }
+        runCatching {
+            Log.i(TAG, "stopFindPhone → setStopFindPhone")
+            BLEManager.setStopFindPhone(com.ido.ble.protocol.model.StopFindPhone())
+        }.onFailure { Log.w(TAG, "stopFindPhone failed", it) }
+    }
+
     /**
      * Enable the watch's per-type message-notify state so it will actually *display* the notices we
      * push (W7). Mirrors VeryFit's `RemindDataManager.sendDefaultNotificationState2Device`, which sends
@@ -1450,7 +1464,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onAntiLostNotice(on: Boolean, time: Long) {}
-        override fun onFindPhone(on: Boolean, time: Long) {}
+
+        // Protocol events 570/571: the watch started (on=true) or cancelled (on=false) find-phone.
+        override fun onFindPhone(on: Boolean, time: Long) {
+            Log.i(TAG, "onFindPhone on=$on")
+            _controlEvents.tryEmit(
+                if (on) WatchControlEvent.FIND_PHONE_START else WatchControlEvent.FIND_PHONE_STOP,
+            )
+        }
+
         override fun onOneKeySOS(on: Boolean, time: Long) {}
     }
 
