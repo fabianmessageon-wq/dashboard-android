@@ -23,6 +23,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchSongImportPreparer
+import dev.jaredhq.dashboardandroid.watch.schedule.WatchSchedulePusher
 import dev.jaredhq.dashboardandroid.watch.weather.WeatherPusher
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
@@ -113,6 +114,10 @@ object ServiceLocator {
     lateinit var weatherPusher: WeatherPusher
         private set
 
+    /** Keeps the watch's native schedule/events screen in step with the dashboard feed. */
+    lateinit var schedulePusher: WatchSchedulePusher
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -172,6 +177,11 @@ object ServiceLocator {
             )
             watchSongImportPreparer = AndroidWatchSongImportPreparer(appContext)
             weatherPusher = WeatherPusher(context = appContext, engine = watchEngine)
+            schedulePusher = WatchSchedulePusher(
+                context = appContext,
+                engine = watchEngine,
+                repository = repository,
+            )
 
             initialized = true
         }

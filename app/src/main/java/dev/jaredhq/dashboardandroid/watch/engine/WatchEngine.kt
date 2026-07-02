@@ -171,7 +171,31 @@ interface WatchEngine {
      * Default: a no-op returning false, so engines without weather support compile unchanged.
      */
     fun pushWeather(weather: WatchWeather): Boolean = false
+
+    /**
+     * Whether the connected watch has a native schedule/events screen the phone can write
+     * ([pushSchedule]): true/false once the function table is known, null while it isn't.
+     */
+    fun supportsSchedulePush(): Boolean? = false
+
+    /**
+     * Replace the app-owned slots on the watch's schedule/events screen with [entries] (previously
+     * pushed slots are cleared first, so this is a full overwrite of what we manage — other
+     * sources' entries are untouched). Returns whether the commands were dispatched.
+     * Default: a no-op returning false, so engines without schedule support compile unchanged.
+     */
+    fun pushSchedule(entries: List<WatchScheduleEntry>): Boolean = false
 }
+
+/**
+ * One entry for the watch's native schedule/events screen. [epochSeconds] is the reminder
+ * instant (device local time); the watch buzzes and lists it under its schedule feature.
+ */
+data class WatchScheduleEntry(
+    val title: String,
+    val note: String? = null,
+    val epochSeconds: Long,
+)
 
 /**
  * A message to surface on the watch face (W7). [appName] is shown as the source/sender label and

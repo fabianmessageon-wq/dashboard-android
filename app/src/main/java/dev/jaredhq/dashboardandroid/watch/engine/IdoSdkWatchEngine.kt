@@ -914,6 +914,78 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "exitCameraMode failed", it) }
     }
 
+    // ── Schedule/events push (phone → watch) ────────────────────────────────────────────
+
+    override fun supportsSchedulePush(): Boolean? {
+        if (!isConnected()) return null
+        val info = cachedFunctionInfo ?: return null
+        return info.V3_schedule_reminder
+    }
+
+    override fun pushSchedule(entries: List<WatchScheduleEntry>): Boolean {
+        if (!isConnected()) return false
+        val info = cachedFunctionInfo ?: run {
+            Log.w(TAG, "pushSchedule skipped — function table not fetched yet")
+            return false
+        }
+        if (!info.V3_schedule_reminder) {
+            Log.w(TAG, "pushSchedule skipped — watch lacks V3_schedule_reminder")
+            return false
+        }
+        // Cap to the watch's advertised capacity (0 = unadvertised → conservative default).
+        val capacity = info.support_send_schedule_reminder_num
+            .let { if (it in 1..SCHEDULE_MAX_SLOTS) it else SCHEDULE_MAX_SLOTS }
+        val toSend = entries.take(capacity)
+        return runCatching {
+            // Full overwrite of our slot range: delete ids 1..capacity, then add. Ids are ours —
+            // VeryFit assigns its own from its DB, and its delete matches on id, so clearing our
+            // fixed range never touches entries another app wrote with higher ids.
+            val stale = (1..capacity).map { slot -> scheduleReminderFor(slot, null) }
+            BLEManager.deleteScheduleReminderV3(stale)
+            if (toSend.isNotEmpty()) {
+                val adds = toSend.mapIndexed { i, e -> scheduleReminderFor(i + 1, e) }
+                BLEManager.addScheduleReminderV3(adds)
+                // Make sure the watch actually notifies for schedule entries (mirrors VeryFit's
+                // reminder switch; idempotent, cheap enough to send with every push).
+                BLEManager.setScheduleReminderSwitch(
+                    com.ido.ble.protocol.model.ScheduleReminderSwitch().apply { notify_flag = 1 },
+                )
+            }
+            Log.i(TAG, "pushSchedule → ${toSend.size} entr${if (toSend.size == 1) "y" else "ies"} (capacity=$capacity)")
+            true
+        }.onFailure { Log.w(TAG, "pushSchedule failed", it) }.getOrDefault(false)
+    }
+
+    /** Build the SDK model for slot [id]; a null [entry] makes a delete-marker for that slot. */
+    private fun scheduleReminderFor(
+        id: Int,
+        entry: WatchScheduleEntry?,
+    ): com.ido.ble.protocol.model.ScheduleReminderV3 =
+        com.ido.ble.protocol.model.ScheduleReminderV3().apply {
+            setId(id)
+            // VeryFit's add path: remind_on_off=1, state=2, once-off repeat with no weekdays.
+            setRemind_on_off(1)
+            setState(2)
+            setRepeat_type(1)
+            setWeekRepeat(BooleanArray(7))
+            if (entry != null) {
+                setTitle(entry.title.take(SCHEDULE_TITLE_MAX))
+                setNote(entry.note?.take(SCHEDULE_TITLE_MAX) ?: "")
+                val cal = java.util.Calendar.getInstance().apply {
+                    timeInMillis = entry.epochSeconds * 1000
+                }
+                setYear(cal.get(java.util.Calendar.YEAR))
+                setMon(cal.get(java.util.Calendar.MONTH) + 1)
+                setDay(cal.get(java.util.Calendar.DAY_OF_MONTH))
+                setHour(cal.get(java.util.Calendar.HOUR_OF_DAY))
+                setMin(cal.get(java.util.Calendar.MINUTE))
+                setSec(0)
+            } else {
+                setTitle("")
+                setNote("")
+            }
+        }
+
     // ── Weather push (phone → watch) ───────────────────────────────────────────────────
 
     override fun supportsWeatherPush(): Boolean? {
@@ -963,6 +1035,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     ): com.ido.ble.protocol.model.WeatherInfoV3 {
         val now = java.util.Calendar.getInstance()
         return com.ido.ble.protocol.model.WeatherInfoV3().apply {
+            // VeryFit always sends version=1 (WeatherHelper.serverWeather2WeatherV3); firmware
+            // ignores a version-0 payload — the watch face showed nothing until this was set.
+            version = 1
             month = now.get(java.util.Calendar.MONTH) + 1
             day = now.get(java.util.Calendar.DAY_OF_MONTH)
             hour = now.get(java.util.Calendar.HOUR_OF_DAY)
@@ -2213,7 +2288,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 "menu_main7=${readFunctionFlag("ex_main7_menu_list")}, " +
                 "shortcut=${readFunctionFlag("shortcut")}, " +
                 "weather_v3=${readFunctionFlag("V3_support_set_v3_weather")}, " +
-                "over_find_phone=${readFunctionFlag("support_over_find_phone")}",
+                "over_find_phone=${readFunctionFlag("support_over_find_phone")}, " +
+                "schedule_v3=${readFunctionFlag("V3_schedule_reminder")} " +
+                "(slots=${cachedFunctionInfo?.support_send_schedule_reminder_num})",
         )
     }
 
@@ -2401,6 +2478,10 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
         /** Beat between the GATT link settling and requesting the system (Classic) bond. */
         const val SYSTEM_BOND_DELAY_MS = 3_000L
+
+        /** App-owned schedule slots on the watch (fallback when the table advertises no count). */
+        const val SCHEDULE_MAX_SLOTS = 8
+        const val SCHEDULE_TITLE_MAX = 60
 
         /**
          * How long the connect may go with NO progress callback while still SCANNING/CONNECTING

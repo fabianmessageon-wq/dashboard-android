@@ -66,8 +66,9 @@ class WatchSyncWorker(
         // have — the app connects on-demand, so a sync is the reliable moment the watch is reachable.
         if (engine.isConnected()) {
             runCatching { pushPendingToWatch(engine) }
-            // Same connection window: refresh the watch's weather face if an hourly push is due.
+            // Same connection window: refresh the watch's weather face + schedule screen if due.
             runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+            runCatching { ServiceLocator.schedulePusher.pushIfDue() }
         }
 
         // Release the link so it can't linger and contend with the UI on the next foreground use.

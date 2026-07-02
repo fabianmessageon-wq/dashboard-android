@@ -90,13 +90,20 @@ class WatchConnectionService : Service() {
             }
         }
 
-        // Weather to the watch face while the link is up: checked on connect (once the link
-        // settles into CONNECTED) and hourly after; WeatherPusher itself rate-limits to ~1h,
-        // so these overlapping triggers can't spam the watch or the weather APIs.
+        // Weather + schedule to the watch while the link is up: checked when the link settles into
+        // CONNECTED and hourly after. Each CONNECTED trigger waits out a settle window and re-checks
+        // the state, so a push never interleaves with the ordered health sync that starts right
+        // after bind (VeryFit sends weather strictly outside the sync too; the post-sync
+        // SYNCING→CONNECTED transition is the trigger that usually lands the push). Both pushers
+        // self-dedupe (hourly rate limit / change signature), so overlapping triggers are harmless.
         scope.launch {
             engine.connectionState.collect { state ->
                 if (state == WatchEngineConnectionState.CONNECTED) {
-                    runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                    delay(PUSH_SETTLE_MS)
+                    if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
+                        runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                        runCatching { ServiceLocator.schedulePusher.pushIfDue() }
+                    }
                 }
             }
         }
@@ -105,6 +112,7 @@ class WatchConnectionService : Service() {
                 delay(WEATHER_INTERVAL_MS)
                 if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
                     runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                    runCatching { ServiceLocator.schedulePusher.pushIfDue() }
                 }
             }
         }
@@ -332,6 +340,7 @@ class WatchConnectionService : Service() {
         private const val CAMERA_NOTIF_ID = 1004
         private const val SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6h
         private const val WEATHER_INTERVAL_MS = 60 * 60 * 1000L // 1h (pusher self-rate-limits too)
+        private const val PUSH_SETTLE_MS = 20_000L // outlast the post-bind health sync (~6-12s)
         private const val CONNECT_SETTLE_MS = 20_000L
         private const val RECONNECT_BACKOFF_MS = 60_000L
 
