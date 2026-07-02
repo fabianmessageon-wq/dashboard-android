@@ -780,6 +780,7 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.unregisterDeviceControlAppCallBack(deviceControlCallBack)
         cm.unregisterOperateCallBack(operateCallBack)
         cm.unregisterOperateMusicCallBack(operateMusicCallBack)
+        BLEManager.unregisterGetDeviceParaCallBack(deviceParaCallBack)
         initialized = false
     }
 
@@ -937,24 +938,52 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             .let { if (it in 1..SCHEDULE_MAX_SLOTS) it else SCHEDULE_MAX_SLOTS }
         val toSend = entries.take(capacity)
         return runCatching {
-            // Full overwrite of our slot range: delete ids 1..capacity, then add. Ids are ours —
-            // VeryFit assigns its own from its DB, and its delete matches on id, so clearing our
-            // fixed range never touches entries another app wrote with higher ids.
-            val stale = (1..capacity).map { slot -> scheduleReminderFor(slot, null) }
-            BLEManager.deleteScheduleReminderV3(stale)
-            if (toSend.isNotEmpty()) {
-                val adds = toSend.mapIndexed { i, e -> scheduleReminderFor(i + 1, e) }
-                BLEManager.addScheduleReminderV3(adds)
-                // Make sure the watch actually notifies for schedule entries (mirrors VeryFit's
-                // reminder switch; idempotent, cheap enough to send with every push).
+            // Commands are spaced out on the main handler: a hardware capture showed a delete
+            // followed 14ms later by the add gets the add silently swallowed (no device ack, store
+            // stayed empty), matching VeryFit's behaviour of only ever sending one schedule op per
+            // user action. The delete is also skipped when there's nothing of ours to clear.
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            var delayMs = 0L
+            fun step(block: () -> Unit) {
+                handler.postDelayed({ if (isConnected()) runCatching(block) }, delayMs)
+                delayMs += SCHEDULE_STEP_SPACING_MS
+            }
+            // Enable schedule reminders first (mirrors VeryFit's switch screen; its default
+            // notify_flag is 3, not 1 — see ReminderSelectActivity's null-fallback).
+            step {
                 BLEManager.setScheduleReminderSwitch(
-                    com.ido.ble.protocol.model.ScheduleReminderSwitch().apply { notify_flag = 1 },
+                    com.ido.ble.protocol.model.ScheduleReminderSwitch().apply { notify_flag = 3 },
                 )
             }
-            Log.i(TAG, "pushSchedule → ${toSend.size} entr${if (toSend.size == 1) "y" else "ies"} (capacity=$capacity)")
+            if (hasPushedScheduleThisSession) {
+                // Clear our slot range before re-adding. Ids are ours — VeryFit assigns its own
+                // from its DB and deletes match on id, so this never touches other apps' entries.
+                step {
+                    BLEManager.deleteScheduleReminderV3(
+                        (1..capacity).map { slot -> scheduleReminderFor(slot, null) },
+                    )
+                }
+            }
+            if (toSend.isNotEmpty()) {
+                step {
+                    BLEManager.addScheduleReminderV3(
+                        toSend.mapIndexed { i, e -> scheduleReminderFor(i + 1, e) },
+                    )
+                    hasPushedScheduleThisSession = true
+                }
+            }
+            // Closed-loop verification: ask the watch what it now stores; the reply lands in
+            // [deviceParaCallBack]'s onGetScheduleReminderV3 and is logged (count + slots).
+            delayMs += SCHEDULE_QUERY_DELAY_MS
+            step { BLEManager.queryScheduleReminderV3() }
+            Log.i(TAG, "pushSchedule → ${toSend.size} entr${if (toSend.size == 1) "y" else "ies"} (capacity=$capacity, spaced)")
             true
         }.onFailure { Log.w(TAG, "pushSchedule failed", it) }.getOrDefault(false)
     }
+
+    /** Whether this app has written schedule slots since the last connect (gates the range clear). */
+    @Volatile
+    private var hasPushedScheduleThisSession = false
 
     /** Build the SDK model for slot [id]; a null [entry] makes a delete-marker for that slot. */
     private fun scheduleReminderFor(
@@ -963,9 +992,9 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
     ): com.ido.ble.protocol.model.ScheduleReminderV3 =
         com.ido.ble.protocol.model.ScheduleReminderV3().apply {
             setId(id)
-            // VeryFit's add path: remind_on_off=1, state=2, once-off repeat with no weekdays.
             setRemind_on_off(1)
-            setState(2)
+            // Wire states (ScheduleReminderV3 constants): 1 = DELETE, 2 = ENABLE, 0 = INVALID.
+            setState(if (entry != null) 2 else 1)
             setRepeat_type(1)
             setWeekRepeat(BooleanArray(7))
             if (entry != null) {
@@ -985,6 +1014,18 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 setNote("")
             }
         }
+
+    // Logs the watch's actual stored schedule after each push (queryScheduleReminderV3 reply) —
+    // the closed loop that shows whether adds really landed. Extends the SDK's no-op base so only
+    // the schedule reply is handled.
+    private val deviceParaCallBack = object : com.ido.ble.callback.BaseGetDeviceParamCallback() {
+        override fun onGetScheduleReminderV3(list: MutableList<com.ido.ble.protocol.model.ScheduleReminderV3>?) {
+            val summary = list.orEmpty().joinToString("; ") {
+                "#${it.id} '${it.title}' ${it.year}-${it.mon}-${it.day} ${it.hour}:${it.min} state=${it.state}"
+            }
+            Log.i(TAG, "watch schedule store: ${list?.size ?: 0} entries [$summary]")
+        }
+    }
 
     // ── Weather push (phone → watch) ───────────────────────────────────────────────────
 
@@ -1193,6 +1234,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         cm.registerDeviceControlAppCallBack(deviceControlCallBack)
         cm.registerOperateCallBack(operateCallBack)
         cm.registerOperateMusicCallBack(operateMusicCallBack)
+        // Device-parameter replies (schedule store query after a pushSchedule).
+        BLEManager.registerGetDeviceParaCallBack(deviceParaCallBack)
         // NOTE: no registerSyncActivity/HealthCallBack here. The orchestrated syncAllData() path
         // delivers every record through the SyncPara.ISyncDataListener (syncDataListener) below;
         // registering the CallBackManager SyncCallBacks too would double-deliver each record.
@@ -2487,6 +2530,8 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         /** App-owned schedule slots on the watch (fallback when the table advertises no count). */
         const val SCHEDULE_MAX_SLOTS = 8
         const val SCHEDULE_TITLE_MAX = 60
+        const val SCHEDULE_QUERY_DELAY_MS = 2_500L
+        const val SCHEDULE_STEP_SPACING_MS = 700L
 
         /**
          * How long the connect may go with NO progress callback while still SCANNING/CONNECTING

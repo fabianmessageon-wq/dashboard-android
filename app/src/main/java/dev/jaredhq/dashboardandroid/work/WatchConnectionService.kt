@@ -102,7 +102,10 @@ class WatchConnectionService : Service() {
                     delay(PUSH_SETTLE_MS)
                     if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
                         runCatching { ServiceLocator.weatherPusher.pushIfDue() }
-                        runCatching { ServiceLocator.schedulePusher.pushIfDue() }
+                        // Forced on (re)connect: a watch reset/re-pair wipes its schedule store but
+                        // the phone-side change signature can't see that — the overwrite push is
+                        // idempotent, so re-sending on each settled link keeps a wiped watch healed.
+                        runCatching { ServiceLocator.schedulePusher.pushIfDue(force = true) }
                     }
                 }
             }

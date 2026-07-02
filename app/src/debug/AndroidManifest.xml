@@ -31,5 +31,15 @@
                 <action android:name="dev.jaredhq.dashboardandroid.DEBUG_SET_WATCH_MAC" />
             </intent-filter>
         </receiver>
+
+        <!-- Debug-only: force weather + schedule pushes over the existing link.
+             See DebugPushWatchNowReceiver. -->
+        <receiver
+            android:name=".work.DebugPushWatchNowReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jaredhq.dashboardandroid.DEBUG_PUSH_WATCH_NOW" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
