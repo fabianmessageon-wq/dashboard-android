@@ -90,6 +90,25 @@ class WatchConnectionService : Service() {
             }
         }
 
+        // Weather to the watch face while the link is up: checked on connect (once the link
+        // settles into CONNECTED) and hourly after; WeatherPusher itself rate-limits to ~1h,
+        // so these overlapping triggers can't spam the watch or the weather APIs.
+        scope.launch {
+            engine.connectionState.collect { state ->
+                if (state == WatchEngineConnectionState.CONNECTED) {
+                    runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                }
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                delay(WEATHER_INTERVAL_MS)
+                if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
+                    runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                }
+            }
+        }
+
         // Perform call actions the watch initiates (answer/reject/mute) — W7 call control.
         scope.launch { engine.controlEvents.collect { handleControl(it) } }
 
@@ -254,6 +273,7 @@ class WatchConnectionService : Service() {
         private const val CHANNEL = "watch_link"
         private const val NOTIF_ID = 1002
         private const val SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6h
+        private const val WEATHER_INTERVAL_MS = 60 * 60 * 1000L // 1h (pusher self-rate-limits too)
         private const val CONNECT_SETTLE_MS = 20_000L
         private const val RECONNECT_BACKOFF_MS = 60_000L
 

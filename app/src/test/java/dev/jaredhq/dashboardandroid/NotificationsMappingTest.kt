@@ -36,9 +36,11 @@ class NotificationsMappingTest {
             { "id": "deadline:task:12", "kind": "deadline", "title": "Submit proposal", "detail": null,
               "timeLabel": "Due today", "when": 1781654400, "href": "/tasks", "priority": "high" },
             { "id": "habit", "kind": "habit", "title": "2 habits left today", "detail": "Read, Walk",
-              "timeLabel": null, "when": null, "href": "/habits", "priority": "low" }
+              "timeLabel": null, "when": null, "href": "/habits", "priority": "low" },
+            { "id": "reminder:3", "kind": "reminder", "title": "Take out the bins", "detail": null,
+              "timeLabel": "6:00 PM", "when": 1781712000, "href": "/tasks", "priority": "normal" }
           ],
-          "counts": { "events": 1, "deadlines": 1, "habitsRemaining": 2 },
+          "counts": { "events": 1, "deadlines": 1, "habitsRemaining": 2, "reminders": 1 },
           "extraFutureField": "ignored"
         }
     """.trimIndent()
@@ -49,7 +51,7 @@ class NotificationsMappingTest {
 
         assertEquals(1, payload.version)
         assertEquals("2026-06-17", payload.date)
-        assertEquals(4, payload.items.size)
+        assertEquals(5, payload.items.size)
 
         val event = payload.items.first { it.kind == NotificationKind.EVENT }
         assertEquals("Standup", event.title)
@@ -59,8 +61,24 @@ class NotificationsMappingTest {
         val deadline = payload.items.first { it.kind == NotificationKind.DEADLINE }
         assertEquals(NotificationPriority.HIGH, deadline.priority)
 
+        // Payload v2: standalone reminders ride as their own kind + count.
+        val reminder = payload.items.first { it.kind == NotificationKind.REMINDER }
+        assertEquals("Take out the bins", reminder.title)
+        assertEquals(1781712000L, reminder.whenEpoch)
+        assertEquals(1, payload.counts.reminders)
+
         assertEquals(1, payload.counts.events)
         assertEquals(2, payload.counts.habitsRemaining)
+    }
+
+    @Test
+    fun v1CountsWithoutRemindersStillParse() {
+        val v1 = """
+            { "version": 1, "date": "2026-06-17", "generatedAt": "x", "headline": "",
+              "items": [], "counts": { "events": 0, "deadlines": 0, "habitsRemaining": 0 } }
+        """.trimIndent()
+        val payload = json.decodeFromString(NotificationsPayloadDto.serializer(), v1).toDomain()
+        assertEquals(0, payload.counts.reminders)
     }
 
     @Test

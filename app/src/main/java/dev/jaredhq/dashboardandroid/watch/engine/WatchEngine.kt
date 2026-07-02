@@ -146,6 +146,20 @@ interface WatchEngine {
      * Default: a no-op, so engines without device control compile unchanged.
      */
     fun stopFindPhone() {}
+
+    /**
+     * Whether the connected watch can receive a weather push: true/false once its function table
+     * is known, null while it isn't (or when disconnected). Lets the caller skip the weather
+     * fetch entirely for unsupported watches.
+     */
+    fun supportsWeatherPush(): Boolean? = false
+
+    /**
+     * Push a weather snapshot to the watch face. Fire-and-forget like [sendNotification]; returns
+     * whether it was dispatched to the transport (false when disconnected or unsupported).
+     * Default: a no-op returning false, so engines without weather support compile unchanged.
+     */
+    fun pushWeather(weather: WatchWeather): Boolean = false
 }
 
 /**

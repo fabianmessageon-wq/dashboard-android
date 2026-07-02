@@ -878,6 +878,142 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "stopFindPhone failed", it) }
     }
 
+    // ── Weather push (phone → watch) ───────────────────────────────────────────────────
+
+    override fun supportsWeatherPush(): Boolean? {
+        if (!isConnected()) return null
+        val info = cachedFunctionInfo ?: return null
+        return info.V3_support_set_v3_weather
+    }
+
+    override fun pushWeather(weather: WatchWeather): Boolean {
+        if (!isConnected()) return false
+        val info = cachedFunctionInfo ?: run {
+            Log.w(TAG, "pushWeather skipped — function table not fetched yet")
+            return false
+        }
+        // Only the V3 weather path is implemented; the legacy `weather` flag's WeatherInfo
+        // command isn't needed for this hardware (the Active 4 Pro family is V3 throughout).
+        if (!info.V3_support_set_v3_weather) {
+            Log.w(TAG, "pushWeather skipped — watch lacks V3_support_set_v3_weather")
+            return false
+        }
+        return runCatching {
+            if (info.V3_support_set_weather_sun_time && weather.sunrise != null && weather.sunset != null) {
+                BLEManager.setWeatherSunTime(
+                    com.ido.ble.protocol.model.WeatherSunTime().apply {
+                        sunrise_hour = weather.sunrise.hour
+                        sunrise_min = weather.sunrise.minute
+                        sunset_hour = weather.sunset.hour
+                        sunset_min = weather.sunset.minute
+                    },
+                )
+            }
+            val v3 = buildWeatherInfoV3(weather, info)
+            Log.i(
+                TAG,
+                "pushWeather → setWeatherDataV3 " +
+                    "(${weather.cityName}, ${weather.temperatureC}°C, ${weather.condition}, " +
+                    "${weather.hourly.size}h/${weather.daily.size}d)",
+            )
+            BLEManager.setWeatherDataV3(v3)
+            true
+        }.onFailure { Log.w(TAG, "pushWeather failed", it) }.getOrDefault(false)
+    }
+
+    private fun buildWeatherInfoV3(
+        weather: WatchWeather,
+        info: SupportFunctionInfo,
+    ): com.ido.ble.protocol.model.WeatherInfoV3 {
+        val now = java.util.Calendar.getInstance()
+        return com.ido.ble.protocol.model.WeatherInfoV3().apply {
+            month = now.get(java.util.Calendar.MONTH) + 1
+            day = now.get(java.util.Calendar.DAY_OF_MONTH)
+            hour = now.get(java.util.Calendar.HOUR_OF_DAY)
+            min = now.get(java.util.Calendar.MINUTE)
+            sec = now.get(java.util.Calendar.SECOND)
+            // VeryFit sends weekday-1 (Calendar.DAY_OF_WEEK is 1=Sunday, so 0 = Sunday on the wire).
+            week = now.get(java.util.Calendar.DAY_OF_WEEK) - 1
+            city_name = weather.cityName
+            weather_type = weatherTypeFor(weather.condition)
+            // The V3 wire carries temperature as °C + 100 (keeps sub-zero temps unsigned).
+            today_tmp = weather.temperatureC + 100
+            today_max_temp = maxOf(weather.maxTempC, weather.temperatureC) + 100
+            today_min_temp = minOf(weather.minTempC, weather.temperatureC) + 100
+            humidity = weather.humidityPercent ?: 0
+            today_uv_intensity = weather.uvIndex ?: 0
+            precipitation_probability = weather.precipProbabilityPercent ?: 0
+            wind_speed = weather.windSpeedKmh ?: 0
+            wind_force = beaufortFor(weather.windSpeedKmh)
+            // hPa × 100 on the wire; zeroed when the watch doesn't take the pressure extension.
+            atmospheric_pressure =
+                if (info.support_set_v3_weatcher_add_atmospheric_pressure) {
+                    ((weather.pressureHpa ?: 0f) * 100).toInt()
+                } else {
+                    0
+                }
+            weather.sunrise?.let { sunrise_hour = it.hour; sunrise_min = it.minute }
+            weather.sunset?.let { sunset_hour = it.hour; sunset_min = it.minute }
+            if (info.v3_support_set_v3_weatcher_add_sunrise &&
+                weather.sunrise != null && weather.sunset != null
+            ) {
+                sunrise_item = arrayListOf(
+                    com.ido.ble.protocol.model.WeatherInfoV3.SunRiseSet().apply {
+                        sunrise_hour = weather.sunrise.hour
+                        sunrise_min = weather.sunrise.minute
+                        sunset_hour = weather.sunset.hour
+                        sunset_min = weather.sunset.minute
+                    },
+                )
+                sunrise_item_num = 1
+            }
+            future_items = ArrayList(
+                weather.daily.map { d ->
+                    com.ido.ble.protocol.model.WeatherInfoV3.Future().apply {
+                        weather_type = weatherTypeFor(d.condition)
+                        max_temp = d.maxTempC + 100
+                        min_temp = d.minTempC + 100
+                    }
+                },
+            )
+            hours_weather_items = ArrayList(
+                weather.hourly.map { h ->
+                    com.ido.ble.protocol.model.WeatherInfoV3.Hour24().apply {
+                        weather_type = weatherTypeFor(h.condition)
+                        temperature = h.temperatureC + 100
+                        probability = h.precipProbabilityPercent ?: 0
+                    }
+                },
+            )
+        }
+    }
+
+    /** Our condition taxonomy → the IDO icon codes (WeatherInfoV3.WEATHER_TYPE_*). */
+    private fun weatherTypeFor(condition: WatchWeatherCondition): Int = when (condition) {
+        WatchWeatherCondition.CLEAR -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_CLEAR
+        WatchWeatherCondition.PARTLY_CLOUDY -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_CLOUDY
+        WatchWeatherCondition.OVERCAST -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_OVERCASTSKY
+        WatchWeatherCondition.FOG -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_HAZE
+        WatchWeatherCondition.DRIZZLE -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SHOWER
+        WatchWeatherCondition.RAIN -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_RAIN
+        // No dedicated thunder icon in the classic set — heavy rain reads closest.
+        WatchWeatherCondition.HEAVY_RAIN,
+        WatchWeatherCondition.THUNDERSTORM,
+        -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_RAINSTORM
+        WatchWeatherCondition.SLEET -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SLEET
+        WatchWeatherCondition.SNOW -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SNOW
+        WatchWeatherCondition.WINDY -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_GALE
+        WatchWeatherCondition.OTHER -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_OTHER
+    }
+
+    /** Beaufort number from km/h — VeryFit's wind_force is the same 0–12 level scale. */
+    private fun beaufortFor(windKmh: Int?): Int {
+        val v = windKmh ?: return 0
+        val thresholds = intArrayOf(1, 5, 11, 19, 28, 38, 49, 61, 74, 88, 102, 117)
+        thresholds.forEachIndexed { i, t -> if (v < t) return i }
+        return 12
+    }
+
     /**
      * Enable the watch's per-type message-notify state so it will actually *display* the notices we
      * push (W7). Mirrors VeryFit's `RemindDataManager.sendDefaultNotificationState2Device`, which sends

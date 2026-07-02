@@ -23,6 +23,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchSongImportPreparer
+import dev.jaredhq.dashboardandroid.watch.weather.WeatherPusher
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +94,10 @@ object ServiceLocator {
     lateinit var watchSongImportPreparer: AndroidWatchSongImportPreparer
         private set
 
+    /** Hourly-rate-limited weather push to the watch (best-effort, keyless sources). */
+    lateinit var weatherPusher: WeatherPusher
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -151,6 +156,7 @@ object ServiceLocator {
                 scope = watchMusicScope,
             )
             watchSongImportPreparer = AndroidWatchSongImportPreparer(appContext)
+            weatherPusher = WeatherPusher(context = appContext, engine = watchEngine)
 
             initialized = true
         }
