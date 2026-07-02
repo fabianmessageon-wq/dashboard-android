@@ -138,6 +138,39 @@ interface WatchEngine {
      * call API. Default: a no-op, so non-SDK engines compile unchanged.
      */
     fun stopIncomingCall() {}
+
+    /**
+     * Tell the watch the find-phone alert has ended on the phone (found, dismissed, or timed out)
+     * so it can leave its "finding phone" screen. Pairs with
+     * [WatchControlEvent.FIND_PHONE_START]; only sent when the watch advertises support for it.
+     * Default: a no-op, so engines without device control compile unchanged.
+     */
+    fun stopFindPhone() {}
+
+    /**
+     * Whether the connected watch can receive a weather push: true/false once its function table
+     * is known, null while it isn't (or when disconnected). Lets the caller skip the weather
+     * fetch entirely for unsupported watches.
+     */
+    fun supportsWeatherPush(): Boolean? = false
+
+    /**
+     * Tell the watch the phone camera is open, so it shows its remote-shutter screen (wrist taps
+     * then arrive as [WatchControlEvent.CAMERA_TAKE_PHOTO]). Returns whether the command was
+     * dispatched. Pair every successful call with [exitCameraMode] when the camera closes.
+     * Default: a no-op returning false, so engines without camera control compile unchanged.
+     */
+    fun enterCameraMode(): Boolean = false
+
+    /** Leave remote-shutter mode on the watch. Safe to call when not in camera mode. */
+    fun exitCameraMode() {}
+
+    /**
+     * Push a weather snapshot to the watch face. Fire-and-forget like [sendNotification]; returns
+     * whether it was dispatched to the transport (false when disconnected or unsupported).
+     * Default: a no-op returning false, so engines without weather support compile unchanged.
+     */
+    fun pushWeather(weather: WatchWeather): Boolean = false
 }
 
 /**
@@ -164,9 +197,24 @@ enum class WatchNotificationCategory {
     MISSED_CALL,
 }
 
-/** A control action the watch asks the phone to perform (W7 call control). */
+/** A control action the watch asks the phone to perform (W7 call control, find-phone, camera). */
 enum class WatchControlEvent {
     ANSWER_CALL,
     REJECT_CALL,
     MUTE_CALL,
+
+    /** The watch asked the phone to make itself findable (ring + vibrate). */
+    FIND_PHONE_START,
+
+    /** The watch cancelled its find-phone request (e.g. stopped from the wrist). */
+    FIND_PHONE_STOP,
+
+    /** The watch entered its remote-shutter screen — open the phone camera. */
+    CAMERA_OPEN,
+
+    /** The watch left its remote-shutter screen — close the phone camera. */
+    CAMERA_CLOSE,
+
+    /** Wrist shutter tap — take a photo now (covers single and burst requests). */
+    CAMERA_TAKE_PHOTO,
 }

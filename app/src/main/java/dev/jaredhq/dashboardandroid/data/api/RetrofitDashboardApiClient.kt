@@ -5,7 +5,7 @@ import dev.jaredhq.dashboardandroid.data.api.dto.ChatRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.FocusStartRequest
 import dev.jaredhq.dashboardandroid.data.api.dto.toDirectCaptureResult
 import dev.jaredhq.dashboardandroid.data.api.dto.toDomain
-import dev.jaredhq.dashboardandroid.data.api.dto.toDto
+import dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto
 import dev.jaredhq.dashboardandroid.domain.model.CaptureResult
 import dev.jaredhq.dashboardandroid.domain.model.DailyIntelligenceSettings
 import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
@@ -13,7 +13,6 @@ import dev.jaredhq.dashboardandroid.domain.model.JaredFeed
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
-import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
@@ -55,8 +54,8 @@ class RetrofitDashboardApiClient(
     override suspend fun chat(message: String): CaptureResult =
         call { service.chat(ChatRequest(message = message)).toDomain() }
 
-    override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult =
-        call { service.uploadWatchHealth(batch.toDto()).toDomain() }
+    override suspend fun uploadWatchHealthDto(dto: WatchHealthUploadDto): WatchHealthUploadResult =
+        call { service.uploadWatchHealth(dto).toDomain() }
 
     override suspend fun getJaredFeed(): JaredFeed =
         call { service.getJaredFeed().toDomain() }

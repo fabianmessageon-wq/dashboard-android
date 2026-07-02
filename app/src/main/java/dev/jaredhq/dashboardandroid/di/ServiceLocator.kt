@@ -10,6 +10,8 @@ import dev.jaredhq.dashboardandroid.data.cache.TodayCache
 import dev.jaredhq.dashboardandroid.data.cache.room.CacheDatabase
 import dev.jaredhq.dashboardandroid.data.cache.room.RoomTodayCache
 import dev.jaredhq.dashboardandroid.data.repository.DashboardRepository
+import dev.jaredhq.dashboardandroid.data.repository.WatchHealthUploadQueue
+import java.io.File
 import dev.jaredhq.dashboardandroid.data.settings.SecureSettingsStore
 import dev.jaredhq.dashboardandroid.data.settings.SettingsStore
 import dev.jaredhq.dashboardandroid.watch.engine.CompositeWatchHealthListener
@@ -21,6 +23,7 @@ import dev.jaredhq.dashboardandroid.watch.engine.WatchUploadOutcome
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.WatchMusicController
 import dev.jaredhq.dashboardandroid.watch.music.AndroidWatchSongImportPreparer
+import dev.jaredhq.dashboardandroid.watch.weather.WeatherPusher
 import androidx.glance.appwidget.updateAll
 import dev.jaredhq.dashboardandroid.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
@@ -48,8 +51,23 @@ object ServiceLocator {
     /** App-lifetime main-thread scope for Android media-session callbacks and watch controls. */
     private val watchMusicScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** The single bound watch (Active 4 Pro) MAC — used as the dashboard device id + connect target. */
-    const val watchDeviceId = "F4:91:29:51:C6:45"
+    /** Factory default: Fabian's Active 4 Pro. Overridable via [watchDeviceId] (persisted). */
+    private const val DEFAULT_WATCH_MAC = "F4:91:29:51:C6:45"
+    private const val WATCH_PREFS = "watch_pairing"
+    private const val KEY_WATCH_MAC = "watch_mac"
+
+    /**
+     * The bound watch's MAC — the connect target and the dashboard device id. Persisted so a
+     * replacement watch can be paired without a rebuild (first step of real pairing; a scan-and-pick
+     * UI can write this). Reads fall back to the factory default.
+     */
+    var watchDeviceId: String
+        get() = appContext.getSharedPreferences(WATCH_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_WATCH_MAC, DEFAULT_WATCH_MAC) ?: DEFAULT_WATCH_MAC
+        set(value) {
+            appContext.getSharedPreferences(WATCH_PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_WATCH_MAC, value.trim().uppercase()).apply()
+        }
 
     /**
      * Optional second sink for decoded health records, set by the product Watch screen's ViewModel
@@ -91,6 +109,10 @@ object ServiceLocator {
     lateinit var watchSongImportPreparer: AndroidWatchSongImportPreparer
         private set
 
+    /** Hourly-rate-limited weather push to the watch (best-effort, keyless sources). */
+    lateinit var weatherPusher: WeatherPusher
+        private set
+
     private lateinit var appContext: Context
 
     fun init(context: Context) {
@@ -112,6 +134,11 @@ object ServiceLocator {
             repository = DashboardRepository(
                 cache = cache,
                 apiProvider = { makeClient() },
+                // Durable spool so a failed watch-health POST survives to the next sync (the BLE
+                // sync + listener flush have already cleared both the watch's and our buffers).
+                watchUploadQueue = WatchHealthUploadQueue(
+                    File(appContext.filesDir, "watch-upload-queue"),
+                ),
             )
 
             // Vendored-SDK engine (ADR 0001). init() is idempotent; it loads the native lib
@@ -144,6 +171,7 @@ object ServiceLocator {
                 scope = watchMusicScope,
             )
             watchSongImportPreparer = AndroidWatchSongImportPreparer(appContext)
+            weatherPusher = WeatherPusher(context = appContext, engine = watchEngine)
 
             initialized = true
         }

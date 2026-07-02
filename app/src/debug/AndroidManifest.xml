@@ -21,5 +21,15 @@
                 <action android:name="dev.jaredhq.dashboardandroid.DEBUG_JARED_FEED_NOW" />
             </intent-filter>
         </receiver>
+
+        <!-- Debug-only: repoint the app at a different watch MAC (pairing without a rebuild).
+             See DebugSetWatchMacReceiver. -->
+        <receiver
+            android:name=".work.DebugSetWatchMacReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.jaredhq.dashboardandroid.DEBUG_SET_WATCH_MAC" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

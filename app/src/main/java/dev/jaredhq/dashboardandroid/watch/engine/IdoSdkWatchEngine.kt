@@ -277,7 +277,24 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         connectWatchdogHandler.postDelayed(connectWatchdogRunnable, CONNECT_STALL_MS)
     }
 
+    // The user explicitly rejected/cancelled the bind on the watch face. The always-on service
+    // reconnects on a ~60s loop, and every reconnect of an unbound watch re-runs bind() — which
+    // re-pops the watch's pairing prompt. Honour the rejection with a cooldown so the prompt isn't
+    // spammed; an explicit user connect can be re-tried after it lapses (or app restart).
+    @Volatile
+    private var bindRejectedAtMs = 0L
+
     override fun connect(macAddress: String) {
+        val sinceReject = System.currentTimeMillis() - bindRejectedAtMs
+        if (bindRejectedAtMs != 0L && sinceReject < BIND_REJECT_COOLDOWN_MS) {
+            Log.w(
+                TAG,
+                "connect ignored — bind was rejected on the watch ${sinceReject / 1000}s ago " +
+                    "(cooldown ${BIND_REJECT_COOLDOWN_MS / 1000}s, so the watch prompt isn't re-spammed)",
+            )
+            _connectionState.value = WatchEngineConnectionState.DISCONNECTED
+            return
+        }
         // autoConnect only works for an already-bound device; for a watch bound to VeryFit we
         // must scan → connect(BLEDevice) → bind() to claim it. Start a scan and match our MAC.
         targetMac = macAddress.uppercase()
@@ -864,6 +881,175 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }.onFailure { Log.w(TAG, "stopIncomingCall failed", it) }
     }
 
+    override fun stopFindPhone() {
+        if (!isConnected()) return
+        // Only newer firmwares understand the explicit stop command (VeryFit gates it the same way);
+        // older ones just time their find-phone screen out on their own.
+        if (cachedFunctionInfo?.support_over_find_phone != true) {
+            Log.i(TAG, "stopFindPhone skipped — watch doesn't advertise support_over_find_phone")
+            return
+        }
+        runCatching {
+            Log.i(TAG, "stopFindPhone → setStopFindPhone")
+            BLEManager.setStopFindPhone(com.ido.ble.protocol.model.StopFindPhone())
+        }.onFailure { Log.w(TAG, "stopFindPhone failed", it) }
+    }
+
+    // ── Remote camera (watch shutter) ──────────────────────────────────────────────────
+
+    override fun enterCameraMode(): Boolean {
+        if (!isConnected()) return false
+        return runCatching {
+            Log.i(TAG, "enterCameraMode")
+            BLEManager.enterCameraMode()
+            true
+        }.onFailure { Log.w(TAG, "enterCameraMode failed", it) }.getOrDefault(false)
+    }
+
+    override fun exitCameraMode() {
+        if (!isConnected()) return
+        runCatching {
+            Log.i(TAG, "exitCameraMode")
+            BLEManager.exitCameraMode()
+        }.onFailure { Log.w(TAG, "exitCameraMode failed", it) }
+    }
+
+    // ── Weather push (phone → watch) ───────────────────────────────────────────────────
+
+    override fun supportsWeatherPush(): Boolean? {
+        if (!isConnected()) return null
+        val info = cachedFunctionInfo ?: return null
+        return info.V3_support_set_v3_weather
+    }
+
+    override fun pushWeather(weather: WatchWeather): Boolean {
+        if (!isConnected()) return false
+        val info = cachedFunctionInfo ?: run {
+            Log.w(TAG, "pushWeather skipped — function table not fetched yet")
+            return false
+        }
+        // Only the V3 weather path is implemented; the legacy `weather` flag's WeatherInfo
+        // command isn't needed for this hardware (the Active 4 Pro family is V3 throughout).
+        if (!info.V3_support_set_v3_weather) {
+            Log.w(TAG, "pushWeather skipped — watch lacks V3_support_set_v3_weather")
+            return false
+        }
+        return runCatching {
+            if (info.V3_support_set_weather_sun_time && weather.sunrise != null && weather.sunset != null) {
+                BLEManager.setWeatherSunTime(
+                    com.ido.ble.protocol.model.WeatherSunTime().apply {
+                        sunrise_hour = weather.sunrise.hour
+                        sunrise_min = weather.sunrise.minute
+                        sunset_hour = weather.sunset.hour
+                        sunset_min = weather.sunset.minute
+                    },
+                )
+            }
+            val v3 = buildWeatherInfoV3(weather, info)
+            Log.i(
+                TAG,
+                "pushWeather → setWeatherDataV3 " +
+                    "(${weather.cityName}, ${weather.temperatureC}°C, ${weather.condition}, " +
+                    "${weather.hourly.size}h/${weather.daily.size}d)",
+            )
+            BLEManager.setWeatherDataV3(v3)
+            true
+        }.onFailure { Log.w(TAG, "pushWeather failed", it) }.getOrDefault(false)
+    }
+
+    private fun buildWeatherInfoV3(
+        weather: WatchWeather,
+        info: SupportFunctionInfo,
+    ): com.ido.ble.protocol.model.WeatherInfoV3 {
+        val now = java.util.Calendar.getInstance()
+        return com.ido.ble.protocol.model.WeatherInfoV3().apply {
+            month = now.get(java.util.Calendar.MONTH) + 1
+            day = now.get(java.util.Calendar.DAY_OF_MONTH)
+            hour = now.get(java.util.Calendar.HOUR_OF_DAY)
+            min = now.get(java.util.Calendar.MINUTE)
+            sec = now.get(java.util.Calendar.SECOND)
+            // VeryFit sends weekday-1 (Calendar.DAY_OF_WEEK is 1=Sunday, so 0 = Sunday on the wire).
+            week = now.get(java.util.Calendar.DAY_OF_WEEK) - 1
+            city_name = weather.cityName
+            weather_type = weatherTypeFor(weather.condition)
+            // The V3 wire carries temperature as °C + 100 (keeps sub-zero temps unsigned).
+            today_tmp = weather.temperatureC + 100
+            today_max_temp = maxOf(weather.maxTempC, weather.temperatureC) + 100
+            today_min_temp = minOf(weather.minTempC, weather.temperatureC) + 100
+            humidity = weather.humidityPercent ?: 0
+            today_uv_intensity = weather.uvIndex ?: 0
+            precipitation_probability = weather.precipProbabilityPercent ?: 0
+            wind_speed = weather.windSpeedKmh ?: 0
+            wind_force = beaufortFor(weather.windSpeedKmh)
+            // hPa × 100 on the wire; zeroed when the watch doesn't take the pressure extension.
+            atmospheric_pressure =
+                if (info.support_set_v3_weatcher_add_atmospheric_pressure) {
+                    ((weather.pressureHpa ?: 0f) * 100).toInt()
+                } else {
+                    0
+                }
+            weather.sunrise?.let { sunrise_hour = it.hour; sunrise_min = it.minute }
+            weather.sunset?.let { sunset_hour = it.hour; sunset_min = it.minute }
+            if (info.v3_support_set_v3_weatcher_add_sunrise &&
+                weather.sunrise != null && weather.sunset != null
+            ) {
+                sunrise_item = arrayListOf(
+                    com.ido.ble.protocol.model.WeatherInfoV3.SunRiseSet().apply {
+                        sunrise_hour = weather.sunrise.hour
+                        sunrise_min = weather.sunrise.minute
+                        sunset_hour = weather.sunset.hour
+                        sunset_min = weather.sunset.minute
+                    },
+                )
+                sunrise_item_num = 1
+            }
+            future_items = ArrayList(
+                weather.daily.map { d ->
+                    com.ido.ble.protocol.model.WeatherInfoV3.Future().apply {
+                        weather_type = weatherTypeFor(d.condition)
+                        max_temp = d.maxTempC + 100
+                        min_temp = d.minTempC + 100
+                    }
+                },
+            )
+            hours_weather_items = ArrayList(
+                weather.hourly.map { h ->
+                    com.ido.ble.protocol.model.WeatherInfoV3.Hour24().apply {
+                        weather_type = weatherTypeFor(h.condition)
+                        temperature = h.temperatureC + 100
+                        probability = h.precipProbabilityPercent ?: 0
+                    }
+                },
+            )
+        }
+    }
+
+    /** Our condition taxonomy → the IDO icon codes (WeatherInfoV3.WEATHER_TYPE_*). */
+    private fun weatherTypeFor(condition: WatchWeatherCondition): Int = when (condition) {
+        WatchWeatherCondition.CLEAR -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_CLEAR
+        WatchWeatherCondition.PARTLY_CLOUDY -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_CLOUDY
+        WatchWeatherCondition.OVERCAST -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_OVERCASTSKY
+        WatchWeatherCondition.FOG -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_HAZE
+        WatchWeatherCondition.DRIZZLE -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SHOWER
+        WatchWeatherCondition.RAIN -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_RAIN
+        // No dedicated thunder icon in the classic set — heavy rain reads closest.
+        WatchWeatherCondition.HEAVY_RAIN,
+        WatchWeatherCondition.THUNDERSTORM,
+        -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_RAINSTORM
+        WatchWeatherCondition.SLEET -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SLEET
+        WatchWeatherCondition.SNOW -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_SNOW
+        WatchWeatherCondition.WINDY -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_GALE
+        WatchWeatherCondition.OTHER -> com.ido.ble.protocol.model.WeatherInfoV3.WEATHER_TYPE_OTHER
+    }
+
+    /** Beaufort number from km/h — VeryFit's wind_force is the same 0–12 level scale. */
+    private fun beaufortFor(windKmh: Int?): Int {
+        val v = windKmh ?: return 0
+        val thresholds = intArrayOf(1, 5, 11, 19, 28, 38, 49, 61, 74, 88, 102, 117)
+        thresholds.forEachIndexed { i, t -> if (v < t) return i }
+        return 12
+    }
+
     /**
      * Enable the watch's per-type message-notify state so it will actually *display* the notices we
      * push (W7). Mirrors VeryFit's `RemindDataManager.sendDefaultNotificationState2Device`, which sends
@@ -1302,7 +1488,19 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
 
     private val scanCallBack = object : ScanCallBack.ICallBack {
         override fun onStart() { noteConnectProgress(); Log.i(TAG, "scan started (target=$targetMac)") }
-        override fun onScanFinished() { noteConnectProgress(); Log.i(TAG, "scan finished") }
+        override fun onScanFinished() {
+            noteConnectProgress()
+            Log.i(TAG, "scan finished")
+            // Still SCANNING here means the whole scan completed WITHOUT finding the target (a
+            // match would have moved us to CONNECTING). Fail the attempt now — retrying after the
+            // short backoff — instead of letting the 90s stall watchdog time the silence out. The
+            // watchdog window is for mid-CONNECT wedges; a finished-but-empty scan is a known outcome
+            // and waiting it out left the UI stuck on "Scanning…" for minutes (pairing regression
+            // vs the original single-shot scan, which surfaced the miss immediately).
+            if (targetMac != null && _connectionState.value == WatchEngineConnectionState.SCANNING) {
+                handleConnectAttemptFailed("scan finished without finding $targetMac")
+            }
+        }
         override fun onFindDevice(device: BLEDevice?) {
             noteConnectProgress()
             val addr = device?.mDeviceAddress ?: return
@@ -1342,6 +1540,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             } else {
                 _connectionState.value = WatchEngineConnectionState.CONNECTED
             }
+            // System (Classic BT) bond — separate from the SDK's GATT bind. Call audio/HFP and the
+            // watch appearing in Android's Bluetooth settings ride on it. The pre-SDK clean-room
+            // stack requested it (createBond) but that was lost when the stack was deleted
+            // (19bef55); since then nothing ever asked Android to pair. Deferred a beat so the
+            // pairing prompt never races the link setup / bind window.
+            android.os.Handler(android.os.Looper.getMainLooper())
+                .postDelayed({ ensureSystemBond() }, SYSTEM_BOND_DELAY_MS)
         }
 
         override fun onInitCompleted(mac: String?) {
@@ -1358,7 +1563,16 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onDeviceInNotBindStatus(mac: String?) {
-            Log.i(TAG, "onDeviceInNotBindStatus $mac (bind() driven from onConnectSuccess)")
+            // The WATCH's authoritative "you are not bound to me" — fired when another app
+            // (VeryFit) re-claimed it since our last session. The SDK's local DB still says
+            // isBind()=true, so onConnectSuccess's stale-flag check skips bind(): the app then
+            // connects but has NO control and the watch never releases its buffered health data
+            // (real data loss once VeryFit pulls it). Trust the watch over the local flag and
+            // re-bind to reclaim — may prompt a confirmation on the watch face (onNeedAuth).
+            Log.w(TAG, "onDeviceInNotBindStatus $mac — watch says we're NOT bound (stale local bind); re-binding to reclaim")
+            _connectionState.value = WatchEngineConnectionState.BINDING
+            runCatching { BLEManager.bind() }
+                .onFailure { Log.w(TAG, "re-bind after onDeviceInNotBindStatus failed", it) }
         }
 
         override fun onConnectFailed(reason: ConnectFailedReason?, mac: String?) {
@@ -1381,9 +1595,35 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onInDfuMode(device: BLEDevice?) { Log.w(TAG, "onInDfuMode") }
     }
 
+    /**
+     * Ensure the watch is bonded at the ANDROID level (Classic BT pairing — the system dialog).
+     * Restores the deleted clean-room stack's behaviour: without this bond the watch never shows
+     * in Bluetooth settings and HFP call audio can't route. No-op when already bonded/bonding.
+     */
+    private fun ensureSystemBond() {
+        val mac = targetMac ?: return
+        if (!isConnected()) return
+        runCatching {
+            val adapter =
+                (app.getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)
+                    ?.adapter ?: return
+            val device = adapter.getRemoteDevice(mac)
+            when (device.bondState) {
+                android.bluetooth.BluetoothDevice.BOND_NONE -> {
+                    Log.i(TAG, "system bond missing for $mac → createBond() (Android shows the pairing prompt)")
+                    Log.i(TAG, "createBond dispatched=${device.createBond()}")
+                }
+                android.bluetooth.BluetoothDevice.BOND_BONDING ->
+                    Log.i(TAG, "system bond for $mac already in progress")
+                else -> Log.i(TAG, "system bond for $mac already present")
+            }
+        }.onFailure { Log.w(TAG, "ensureSystemBond failed (BLUETOOTH_CONNECT granted?)", it) }
+    }
+
     private val bindCallBack = object : BindCallBack.ICallBack {
         override fun onSuccess() {
             Log.i(TAG, "BIND SUCCESS — watch claimed by our app; fetching function table then syncing")
+            bindRejectedAtMs = 0L
             _connectionState.value = WatchEngineConnectionState.CONNECTED
             // Now that bind has actually completed, the device will release its data. Give the
             // link a beat to settle (Classic profiles re-attach right after bind), then syncHealth()
@@ -1395,11 +1635,13 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
             _connectionState.value = WatchEngineConnectionState.AWAITING_WATCH_CONFIRMATION
         }
         override fun onReject() {
-            Log.w(TAG, "bind REJECTED on the watch")
+            Log.w(TAG, "bind REJECTED on the watch — pausing auto-reconnect (cooldown)")
+            bindRejectedAtMs = System.currentTimeMillis()
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onCancel() {
-            Log.w(TAG, "bind cancelled")
+            Log.w(TAG, "bind cancelled — pausing auto-reconnect (cooldown)")
+            bindRejectedAtMs = System.currentTimeMillis()
             _connectionState.value = WatchEngineConnectionState.DISCONNECTED
         }
         override fun onFailed(error: BindCallBack.BindFailedError?) {
@@ -1424,6 +1666,14 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                     WatchControlEvent.REJECT_CALL
                 com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.MUTE_PHONE ->
                     WatchControlEvent.MUTE_CALL
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.OPEN_CAMERA ->
+                    WatchControlEvent.CAMERA_OPEN
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.CLOSE_CAMERA ->
+                    WatchControlEvent.CAMERA_CLOSE
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.TAKE_ONE_PHOTO,
+                com.ido.ble.callback.DeviceControlAppCallBack.DeviceControlEventType.TAKE_MULTI_PHOTO,
+                ->
+                    WatchControlEvent.CAMERA_TAKE_PHOTO
                 else -> null
             }
             if (event != null) {
@@ -1450,7 +1700,15 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         }
 
         override fun onAntiLostNotice(on: Boolean, time: Long) {}
-        override fun onFindPhone(on: Boolean, time: Long) {}
+
+        // Protocol events 570/571: the watch started (on=true) or cancelled (on=false) find-phone.
+        override fun onFindPhone(on: Boolean, time: Long) {
+            Log.i(TAG, "onFindPhone on=$on")
+            _controlEvents.tryEmit(
+                if (on) WatchControlEvent.FIND_PHONE_START else WatchControlEvent.FIND_PHONE_STOP,
+            )
+        }
+
         override fun onOneKeySOS(on: Boolean, time: Long) {}
     }
 
@@ -1861,8 +2119,32 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         override fun onGetDrinkPlan(data: com.ido.ble.protocol.model.DrinkPlanData?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.DRINK_PLAN, parentRecords = 1)
         }
+        // One complete route per call (VeryFit's SyncDeviceDataProxy.processGpsData consumes it the
+        // same way, ignoring isLast — that flag only marks the end of the multi-record stream).
         override fun onGetGpsData(data: com.ido.ble.gps.database.HealthGps?, items: MutableList<com.ido.ble.gps.database.HealthGpsItem>?, isLast: Boolean) {
-            if (data != null) diagnostics.record(WatchSyncDiagnostics.GPS_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+            if (data == null) return
+            diagnostics.record(WatchSyncDiagnostics.GPS_V2, parentRecords = 1, itemSamples = items?.size ?: 0)
+            val points = items.orEmpty().mapNotNull { item ->
+                val lat = item.latitude ?: return@mapNotNull null
+                val lon = item.longitude ?: return@mapNotNull null
+                // (0,0) is the watch's "no fix" filler, not a real position off the Ghanaian coast.
+                if (lat == 0.0 && lon == 0.0) null else WatchGpsPoint(latitude = lat, longitude = lon)
+            }
+            if (points.isEmpty()) return
+            listener?.onGpsRoute(
+                WatchGpsRoute(
+                    startDateTime = WatchTime.ymdhms(
+                        data.year ?: 0,
+                        data.month ?: 0,
+                        data.day ?: 0,
+                        data.hour ?: 0,
+                        data.minute ?: 0,
+                        data.second ?: 0,
+                    ),
+                    intervalSeconds = data.data_interval,
+                    points = points,
+                ),
+            )
         }
         override fun onGetHealthBodyCompositionData(data: com.ido.ble.data.manage.database.HealthBodyComposition?) {
             if (data != null) diagnostics.record(WatchSyncDiagnostics.BODY_COMPOSITION, parentRecords = 1)
@@ -1915,6 +2197,23 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
                 "artist=${readFunctionFlag("V3_music_control_02_add_singer_name")}, " +
                 "onboard=${readFunctionFlag("V3_support_v3_ble_music")}, " +
                 "appSpp=${readFunctionFlag("support_app_connect_with_spp")}",
+        )
+        // On-watch UI customization surface (sport-list + menu reorder/select; see
+        // docs/plans — these gate setSportModeSortInfoV3 / setMenuListV3 feasibility).
+        Log.i(
+            TAG,
+            "customization flags: sport_sort=${readFunctionFlag("sport_mode_sort")}, " +
+                "sport_show_num=${readFunctionFlag("sport_show_num")}, " +
+                "v3_sports_type=${readFunctionFlag("ex_table_main7_v3_sports_type")}, " +
+                "v3_sport_sort_field=${readFunctionFlag("V3_support_v3_get_sport_sort_field")}, " +
+                "no_add_delete=${readFunctionFlag("not_support_delete_add_sport_sort")}, " +
+                "sport100=${readFunctionFlag("V3_set_100_sport_sort")}, " +
+                "menu_list_v3=${readFunctionFlag("support_protocol_v3_menu_list")}, " +
+                "get_menu_v3=${readFunctionFlag("V3_get_menu_list")}, " +
+                "menu_main7=${readFunctionFlag("ex_main7_menu_list")}, " +
+                "shortcut=${readFunctionFlag("shortcut")}, " +
+                "weather_v3=${readFunctionFlag("V3_support_set_v3_weather")}, " +
+                "over_find_phone=${readFunctionFlag("support_over_find_phone")}",
         )
     }
 
@@ -2096,6 +2395,12 @@ class IdoSdkWatchEngine(private val app: Application) : WatchEngine {
         /** Bounded scan→connect retries after a transient GATT-133 first-connect failure. */
         const val MAX_CONNECT_RETRIES = 2
         const val CONNECT_RETRY_DELAY_MS = 2_000L
+
+        /** How long a watch-face bind rejection suppresses auto-reconnect (prompt anti-spam). */
+        const val BIND_REJECT_COOLDOWN_MS = 5 * 60_000L
+
+        /** Beat between the GATT link settling and requesting the system (Classic) bond. */
+        const val SYSTEM_BOND_DELAY_MS = 3_000L
 
         /**
          * How long the connect may go with NO progress callback while still SCANNING/CONNECTING

@@ -46,9 +46,7 @@ class NotificationWorker(
 
         val notificationsResult = ServiceLocator.repository.getNotifications().onSuccess { feed ->
             for (item in feed.items) {
-                if (item.kind != NotificationKind.EVENT && item.kind != NotificationKind.DEADLINE) {
-                    continue
-                }
+                if (!shouldPost(item)) continue
                 if (state.reminderAlreadyShown(feed.date, item.id)) continue
                 Notifier.notifyReminder(ctx, item)
                 state.markReminderShown(feed.date, item.id)
@@ -78,4 +76,17 @@ class NotificationWorker(
         if (api.isAuthError) return false
         return api.status == 0 || api.status in 500..599
     }
+
+    /**
+     * Which feed items become phone notifications. Events/deadlines surface as soon as they appear
+     * (the day's agenda); a standalone reminder waits until its fire instant has actually passed —
+     * a 3 PM reminder shouldn't ring at 8 AM just because it's in today's feed.
+     */
+    private fun shouldPost(item: dev.jaredhq.dashboardandroid.domain.model.NotificationItem): Boolean =
+        when (item.kind) {
+            NotificationKind.EVENT, NotificationKind.DEADLINE -> true
+            NotificationKind.REMINDER ->
+                item.whenEpoch != null && item.whenEpoch <= System.currentTimeMillis() / 1000
+            else -> false
+        }
 }

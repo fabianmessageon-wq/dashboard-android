@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -17,6 +18,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import dev.jaredhq.dashboardandroid.R
 import dev.jaredhq.dashboardandroid.di.ServiceLocator
+import dev.jaredhq.dashboardandroid.notify.FindPhoneAlerter
 import dev.jaredhq.dashboardandroid.notify.NotificationAccess
 import dev.jaredhq.dashboardandroid.watch.engine.WatchControlEvent
 import dev.jaredhq.dashboardandroid.watch.engine.WatchEngine
@@ -51,10 +53,19 @@ class WatchConnectionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var started = false
 
+    // Rings/vibrates when the watch asks "where's my phone?"; its notification's tap/action
+    // re-enters onStartCommand with ACTION_STOP_FIND_PHONE.
+    private val findPhoneAlerter by lazy {
+        FindPhoneAlerter(this, stopFindPhonePendingIntent(this))
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
+        if (intent?.action == ACTION_STOP_FIND_PHONE) {
+            stopFindPhoneAlert(tellWatch = true)
+        }
         if (!started) {
             started = true
             scope.launch { maintain() }
@@ -75,6 +86,25 @@ class WatchConnectionService : Service() {
                     engine.connectionState.value == WatchEngineConnectionState.CONNECTED
                 ) {
                     runCatching { engine.syncHealth() }
+                }
+            }
+        }
+
+        // Weather to the watch face while the link is up: checked on connect (once the link
+        // settles into CONNECTED) and hourly after; WeatherPusher itself rate-limits to ~1h,
+        // so these overlapping triggers can't spam the watch or the weather APIs.
+        scope.launch {
+            engine.connectionState.collect { state ->
+                if (state == WatchEngineConnectionState.CONNECTED) {
+                    runCatching { ServiceLocator.weatherPusher.pushIfDue() }
+                }
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                delay(WEATHER_INTERVAL_MS)
+                if (engine.connectionState.value == WatchEngineConnectionState.CONNECTED) {
+                    runCatching { ServiceLocator.weatherPusher.pushIfDue() }
                 }
             }
         }
@@ -113,7 +143,81 @@ class WatchConnectionService : Service() {
             WatchControlEvent.ANSWER_CALL -> answerCall()
             WatchControlEvent.REJECT_CALL -> rejectCall()
             WatchControlEvent.MUTE_CALL -> muteRinger()
+            WatchControlEvent.FIND_PHONE_START -> startFindPhoneAlert()
+            // The watch itself ended the search — just quiet down, no stop command back.
+            WatchControlEvent.FIND_PHONE_STOP -> stopFindPhoneAlert(tellWatch = false)
+            WatchControlEvent.CAMERA_OPEN -> openRemoteCamera()
+            // Handled by RemoteCameraActivity while it's open; nothing to do from here.
+            WatchControlEvent.CAMERA_CLOSE, WatchControlEvent.CAMERA_TAKE_PHOTO -> Unit
         }
+    }
+
+    // ── Remote camera (watch → phone) ─────────────────────────────────────────────────
+
+    /**
+     * The watch opened its remote-shutter screen. A background service can't reliably start an
+     * activity on Android 10+ — try the direct start (works when the app is foreground) and post
+     * a heads-up notification as the dependable path (the user just touched the watch, so a
+     * one-tap notification is an acceptable extra step).
+     */
+    private fun openRemoteCamera() {
+        val intent = Intent(this, dev.jaredhq.dashboardandroid.ui.camera.RemoteCameraActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        ensureCameraChannel()
+        val n = NotificationCompat.Builder(this, CAMERA_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setColor(getColor(R.color.brand_accent))
+            .setContentTitle(getString(R.string.remote_camera_title))
+            .setContentText(getString(R.string.remote_camera_text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)?.notify(CAMERA_NOTIF_ID, n)
+    }
+
+    // High-importance so the "camera requested from the watch" prompt heads-up immediately
+    // (the always-on link channel is deliberately low-importance and would bury it).
+    private fun ensureCameraChannel() {
+        val mgr = getSystemService(NotificationManager::class.java) ?: return
+        mgr.createNotificationChannel(
+            NotificationChannel(
+                CAMERA_CHANNEL,
+                getString(R.string.channel_remote_camera_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = getString(R.string.channel_remote_camera_desc)
+                setShowBadge(false)
+            },
+        )
+    }
+
+    // ── Find-phone (watch → phone) ────────────────────────────────────────────────────
+
+    private fun startFindPhoneAlert() {
+        findPhoneAlerter.start(onAutoStop = {
+            // Timed out unfound: release the watch's "finding phone" screen too.
+            runCatching { ServiceLocator.watchEngine.stopFindPhone() }
+        })
+    }
+
+    private fun stopFindPhoneAlert(tellWatch: Boolean) {
+        if (!findPhoneAlerter.isActive) return
+        findPhoneAlerter.stop()
+        if (tellWatch) runCatching { ServiceLocator.watchEngine.stopFindPhone() }
     }
 
     private fun hasAnswerPermission(): Boolean =
@@ -173,6 +277,7 @@ class WatchConnectionService : Service() {
     }
 
     override fun onDestroy() {
+        stopFindPhoneAlert(tellWatch = false)
         runCatching { ServiceLocator.watchEngine.disconnect() }
         scope.cancel()
         started = false
@@ -222,10 +327,32 @@ class WatchConnectionService : Service() {
     companion object {
         private const val TAG = "WatchConnService"
         private const val CHANNEL = "watch_link"
+        private const val CAMERA_CHANNEL = "remote_camera"
         private const val NOTIF_ID = 1002
+        private const val CAMERA_NOTIF_ID = 1004
         private const val SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6h
+        private const val WEATHER_INTERVAL_MS = 60 * 60 * 1000L // 1h (pusher self-rate-limits too)
         private const val CONNECT_SETTLE_MS = 20_000L
         private const val RECONNECT_BACKOFF_MS = 60_000L
+
+        /** Stops the find-phone alert (notification tap/action). */
+        private const val ACTION_STOP_FIND_PHONE =
+            "dev.jaredhq.dashboardandroid.action.STOP_FIND_PHONE"
+
+        /**
+         * Delivered into the already-running foreground service, so it's exempt from
+         * background-service-start limits.
+         */
+        private fun stopFindPhonePendingIntent(context: Context): PendingIntent {
+            val intent = Intent(context, WatchConnectionService::class.java)
+                .setAction(ACTION_STOP_FIND_PHONE)
+            return PendingIntent.getService(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
 
         /**
          * Start the always-on connection if mirroring is enabled (notification access granted) and

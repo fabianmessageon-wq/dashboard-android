@@ -40,6 +40,15 @@ enum class FeedItemType(val wire: String, val category: JaredCategory) {
     EVENING_REFLECTION_READY("evening_reflection_ready", JaredCategory.EVENING),
     CARRY_FORWARD_CREATED("carry_forward_created", JaredCategory.RESULT),
     PREFERENCE_LEARNED("preference_learned", JaredCategory.PREFERENCE),
+
+    // Daily insight detectors (HRV, training load, habit cadence, goal risk,
+    // calendar conflicts). Feed-only on the phone: they ride along with the
+    // morning "plan ready" push, so notifying each would just be noise.
+    HRV_INSIGHT("hrv_insight", JaredCategory.INSIGHT),
+    TRAINING_LOAD_INSIGHT("training_load_insight", JaredCategory.INSIGHT),
+    HABIT_CADENCE_INSIGHT("habit_cadence_insight", JaredCategory.INSIGHT),
+    GOAL_RISK_INSIGHT("goal_risk_insight", JaredCategory.INSIGHT),
+    CALENDAR_CONFLICT_INSIGHT("calendar_conflict_insight", JaredCategory.INSIGHT),
     UNKNOWN("unknown", JaredCategory.RESULT);
 
     companion object {
@@ -68,6 +77,9 @@ enum class JaredCategory {
 
     /** Preference/memory updates — passive; silent by default. */
     PREFERENCE,
+
+    /** Deterministic daily insights (HRV/load/habits/goals/calendar) — feed-only, never pushed. */
+    INSIGHT,
 }
 
 enum class FeedItemStatus(val wire: String) {
@@ -124,10 +136,10 @@ data class DailyIntelligenceSettings(
             JaredCategory.MORNING -> morningPlanningEnabled
             JaredCategory.MIDDAY -> middayMonitorEnabled
             JaredCategory.EVENING -> eveningReflectionEnabled
-            // Confirmations follow the master push switch; preference updates are
-            // silent-by-default and never break through as a heads-up.
+            // Confirmations follow the master push switch; preference updates and
+            // daily insights are silent-by-default (the dashboard feed is their surface).
             JaredCategory.RESULT -> true
-            JaredCategory.PREFERENCE -> false
+            JaredCategory.PREFERENCE, JaredCategory.INSIGHT -> false
         }
     }
 }

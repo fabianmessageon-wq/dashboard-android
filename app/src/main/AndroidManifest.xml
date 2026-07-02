@@ -19,6 +19,12 @@
     <!-- Re-arm the always-on watch link after a reboot/update (W7 BootReceiver), so calls/texts keep
          mirroring without the user reopening the app. The receiver self-gates via syncRunState. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Buzz the phone when the watch triggers find-phone (FindPhoneAlerter). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Remote camera: the watch acts as a wrist shutter (RemoteCameraActivity). Runtime-requested
+         when the camera screen opens; no camera hardware is required for the rest of the app. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- BLE permissions — Android 12+ (API 31) uses BLUETOOTH_SCAN / BLUETOOTH_CONNECT.
          Runtime-requested on the Watch tab; BLUETOOTH / BLUETOOTH_ADMIN are for API < 31. -->
@@ -71,6 +77,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Remote-shutter camera, opened from the watch (CAMERA_OPEN control event) or in-app.
+             singleTask so repeated watch triggers reuse the open instance. -->
+        <activity
+            android:name=".ui.camera.RemoteCameraActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.DashboardAndroid" />
 
         <!-- Glance "Today" widget. -->
         <receiver

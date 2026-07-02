@@ -9,7 +9,7 @@ import dev.jaredhq.dashboardandroid.domain.model.FocusStartResult
 import dev.jaredhq.dashboardandroid.domain.model.NotificationsPayload
 import dev.jaredhq.dashboardandroid.domain.model.QuotePayload
 import dev.jaredhq.dashboardandroid.domain.model.TodayPayload
-import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthBatch
+import dev.jaredhq.dashboardandroid.data.api.dto.WatchHealthUploadDto
 import dev.jaredhq.dashboardandroid.watch.engine.WatchHealthUploadResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -103,11 +103,11 @@ class FakeDashboardApiClient(
         )
     }
 
-    override suspend fun uploadWatchHealth(batch: WatchHealthBatch): WatchHealthUploadResult {
+    override suspend fun uploadWatchHealthDto(dto: WatchHealthUploadDto): WatchHealthUploadResult {
         tick()
         // The offline fake simply acknowledges — no health data is persisted. Flag it offline so the
         // UI/logs don't report this as a real upload (see WatchHealthUploadResult.offline).
-        return WatchHealthUploadResult(accepted = true, storedCount = batch.recordCount, offline = true)
+        return WatchHealthUploadResult(accepted = true, storedCount = dto.recordCount, offline = true)
     }
 
     override suspend fun getJaredFeed(): JaredFeed {

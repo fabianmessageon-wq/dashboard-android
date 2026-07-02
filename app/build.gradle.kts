@@ -104,6 +104,11 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
 
+    // Remote camera (watch-triggered shutter — ui/camera)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
     // Networking + JSON
     implementation(libs.retrofit)
     implementation(libs.retrofit.serialization.converter)
